@@ -24,6 +24,14 @@ the token stream into a list of rules and declarations, so you can pick the
 declarations you want to process.
 
 
+### Tokenizer
+
+The tokenizer uses Attoparsec to convert the input to a list of tokens. This
+process removes all comments and collapses consecutive whitespace into a single
+space character (U+0020). There may be other occasions where the tokenizer
+looses information from the input stream.
+
+
 ### Example
 
 In the following example I replace all URLs in the source CSS file with
