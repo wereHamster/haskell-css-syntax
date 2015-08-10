@@ -1,6 +1,7 @@
 This package provides functions to parse a CSS file into a stream of tokens
 and from that into rules or declarations. The exact algorithm is defined
-in the [css-syntax] module.
+in the [css-syntax] module (it is the same algorithm that Blink uses since mid
+2015 when it replaced their old Bison based parser).
 
 Note: Only the tokenizer is currently implemented. Parsing the token stream
 into rules or declarations is available as of yet.
