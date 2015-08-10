@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+cd "$(dirname "$0")/.."
+
+[ -z "$DEBUG" ] || set -x
+
+
+script/bootstrap
+
+cabal test
