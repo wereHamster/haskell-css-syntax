@@ -455,7 +455,7 @@ isHexChar ch
     | otherwise              = False
 
 
-unhex :: Monad m => String -> m Int
+unhex :: (Functor m, Monad m) => String -> m Int
 unhex = fmap toInt . go []
   where
 
