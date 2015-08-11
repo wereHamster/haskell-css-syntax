@@ -174,7 +174,7 @@ renderToken (AtKeyword x)        = "@" <> x
 
 renderToken (Function x)         = x <> "("
 
-renderToken (Hash _ x)           = x
+renderToken (Hash _ x)           = "#" <> x
 
 renderToken (Delim x)            = T.singleton x
 
