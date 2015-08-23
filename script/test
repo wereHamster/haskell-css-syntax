@@ -7,4 +7,5 @@ cd "$(dirname "$0")/.."
 
 script/bootstrap
 
+
 cabal test
