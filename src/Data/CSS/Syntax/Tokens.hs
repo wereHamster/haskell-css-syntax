@@ -20,6 +20,7 @@ import           Data.Attoparsec.Text as AP
 import           Data.Monoid
 import           Data.Char
 import           Data.Scientific
+import           Numeric
 
 import           Prelude
 
@@ -50,8 +51,8 @@ data Token
 
     | Column
 
-    | String !Text
-    | BadString !Text
+    | String !Char !Text
+    | BadString !Char !Text
 
     | Number !Text !NumericValue
     | Percentage !Text !NumericValue
@@ -158,8 +159,8 @@ renderToken (IncludeMatch)       = "~="
 
 renderToken (Column)             = "||"
 
-renderToken (String x)           = "'" <> x <> "'"
-renderToken (BadString x)        = "'" <> x <> "'"
+renderToken (String d x)         = T.singleton d <> renderString x <> T.singleton d
+renderToken (BadString d x)      = T.singleton d <> renderString x <> T.singleton d
 
 renderToken (Number x _)         = x
 renderToken (Percentage x _)     = x <> "%"
@@ -178,6 +179,23 @@ renderToken (Hash _ x)           = "#" <> x
 
 renderToken (Delim x)            = T.singleton x
 
+
+
+renderString :: Text -> Text
+renderString = T.pack . concatMap f . T.unpack
+  where
+    nonPrintableCodePoint c
+        | c >= '\x0000' && c <= '\x0008' = True -- NULL through BACKSPACE
+        | c == '\x000B'                  = True -- LINE TABULATION
+        | c >= '\x000E' && c <= '\x001F' = True -- SHIFT OUT through INFORMATION SEPARATOR ONE
+        | c == '\x007F'                  = True -- DELETE
+        | otherwise                      = False
+
+    nonASCIICodePoint c = c >= '\x0080' -- control
+
+    f c = if nonPrintableCodePoint c || nonASCIICodePoint c
+        then "\\" <> showHex (ord c) ""
+        else [c]
 
 
 parseComment :: Parser ()
@@ -248,9 +266,9 @@ parseString endingCodePoint = do
 
   where
     go acc = choice
-        [ (AP.endOfInput <|> void (AP.char endingCodePoint)) *> return (String acc)
+        [ (AP.endOfInput <|> void (AP.char endingCodePoint)) *> return (String endingCodePoint acc)
         , AP.string "\\\n" *> go acc
-        , whenNext '\n' (BadString acc)
+        , whenNext '\n' (BadString endingCodePoint acc)
         , nextInputCodePoint >>= \ch -> go (acc <> T.singleton ch)
         ]
 
