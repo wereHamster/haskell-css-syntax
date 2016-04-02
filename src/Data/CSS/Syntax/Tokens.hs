@@ -319,7 +319,7 @@ parseName = do
         _ -> return $ T.pack chars
 
 
-parseSign :: Parser (Text, Int)
+parseSign :: Parser (Text, Integer)
 parseSign = do
     mbChar <- AP.peekChar
     case mbChar of
@@ -327,38 +327,47 @@ parseSign = do
         Just '-' -> AP.anyChar >> return ("-", (-1))
         _        -> return ("", 1)
 
+isDecimal :: Char -> Bool
+isDecimal c = c >= '0' && c <= '9'
+{-# INLINE isDecimal #-}
+
+parseDigits :: Parser (Text, Integer)
+parseDigits = do
+    text <- AP.takeWhile1 isDecimal
+    pure (text, T.foldl' step 0 text)
+
+  where
+    step a c = a * 10 + fromIntegral (ord c - 48)
+
+
 parseNumericValue :: Parser (Text, NumericValue)
 parseNumericValue = do
-    -- Sign
+    -- Sign (optional)
     (sS, s) <- parseSign
 
     -- Digits before the decimal dot. They are optional (".1em").
-    (iS, i) <- do
-        digits <- AP.takeWhile isDigit
-        return $ if (T.null digits)
-            then ("", 0)
-            else (digits, read $ T.unpack digits)
+    (iS, i) <- parseDigits <|> pure ("",0)
 
     -- Decimal dot and digits after it. If the decimal dot is there then it
     -- MUST be followed by one or more digits. This is not allowed: "1.".
     (fS, f, fB) <- option ("", 0, False) $ do
-        _ <- AP.char '.'
-        digits <- AP.takeWhile1 isDigit
-        return ("." <> digits, read $ T.unpack digits, True)
+        void $ AP.char '.'
+        (digits, n) <- parseDigits
+        pure ("." <> digits, fromIntegral n, True)
 
     -- Exponent (with optional sign).
     (tS, t, eS, e, eB) <- option ("", 1, "", 0, False) $ do
         e <- AP.char 'E' <|> AP.char 'e'
         (tS, t) <- parseSign
-        eS <- AP.takeWhile1 isDigit
+        (eS, eN) <- parseDigits
 
-        return (T.singleton e <> tS, t, eS, read $ T.unpack eS, True)
+        return (T.singleton e <> tS, t, eS, eN, True)
 
     let repr = sS<>iS<>fS<>tS<>eS
     if T.null repr || repr == "-" || repr == "+" || T.head repr == 'e' || T.head repr == 'E'
         then fail "parseNumericValue: no parse"
         else do
-            let v = fromIntegral s * (i + f*10^^(-(T.length fS - 1))) * 10^^(t*e)
+            let v = fromIntegral s * (fromIntegral i + f*10^^(-(T.length fS - 1))) * 10^^(t*e)
             return $ if fB || eB
                 then (repr, NVNumber v)
                 else (repr, NVInteger v)
