@@ -205,7 +205,9 @@ parseComment = do
 
 parseWhitespace :: Parser Token
 parseWhitespace = do
-    void $ AP.takeWhile1 isWhitespace
+    c <- AP.anyChar
+    guard $ isWhitespace c
+    AP.skipWhile isWhitespace
     return Whitespace
 
 parseChar :: Token -> Char -> Parser Token
