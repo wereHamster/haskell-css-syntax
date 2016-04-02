@@ -474,6 +474,7 @@ isWhitespace '\x0009' = True
 isWhitespace '\x000A' = True
 isWhitespace '\x0020' = True
 isWhitespace _        = False
+{-# INLINE isWhitespace #-}
 
 
 isHexChar :: Char -> Bool
