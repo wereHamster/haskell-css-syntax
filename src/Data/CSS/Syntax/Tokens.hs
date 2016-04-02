@@ -205,18 +205,22 @@ parseComment = do
 
 parseWhitespace :: Parser Token
 parseWhitespace = do
-    c <- AP.anyChar
-    guard $ isWhitespace c
+    AP.skip isWhitespace
     AP.skipWhile isWhitespace
     return Whitespace
+{-# INLINE parseWhitespace #-}
+
 
 parseChar :: Token -> Char -> Parser Token
 parseChar t c = do
     _ <- AP.char c
     return t
+{-# INLINE parseChar #-}
 
 parseStr :: Token -> Text -> Parser Token
 parseStr t str = AP.string str *> return t
+{-# INLINE parseStr #-}
+
 
 escapedCodePoint :: Parser Char
 escapedCodePoint = do
@@ -251,6 +255,7 @@ escapedCodePoint = do
 
 nextInputCodePoint :: Parser Char
 nextInputCodePoint = escapedCodePoint' <|> AP.anyChar
+{-# INLINE nextInputCodePoint #-}
 
 
 whenNext :: Char -> a -> Parser a
@@ -283,9 +288,11 @@ parseHash = do
 
 isNameStartCodePoint :: Char -> Bool
 isNameStartCodePoint c = isLetter c || c >= '\x0080' || c == '_'
+{-# INLINE isNameStartCodePoint #-}
 
 isNameCodePoint :: Char -> Bool
 isNameCodePoint c = isNameStartCodePoint c || isDigit c || c == '-'
+{-# INLINE isNameCodePoint #-}
 
 parseNumeric :: Parser Token
 parseNumeric = do
@@ -301,6 +308,7 @@ parseNumeric = do
 
 nameCodePoint :: Parser Char
 nameCodePoint = AP.satisfy isNameCodePoint
+{-# INLINE nameCodePoint #-}
 
 escapedCodePoint' :: Parser Char
 escapedCodePoint' = do
