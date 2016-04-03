@@ -40,23 +40,23 @@ data Token
 
     | Column
 
-    | String !Char !Text
-    | BadString !Char !Text
+    | String !Char !String
+    | BadString !Char !String
 
-    | Number !Text !NumericValue
-    | Percentage !Text !NumericValue
-    | Dimension !Text !NumericValue !Unit
+    | Number !String !NumericValue
+    | Percentage !String !NumericValue
+    | Dimension !String !NumericValue !Unit
 
-    | Url !Text
-    | BadUrl !Text
+    | Url !String
+    | BadUrl !String
 
-    | Ident !Text
+    | Ident !String
 
     | AtKeyword !Text
 
     | Function !Text
 
-    | Hash !HashFlag !Text
+    | Hash !HashFlag !String
 
     | Delim !Char
 
