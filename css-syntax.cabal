@@ -30,6 +30,9 @@ library
   exposed-modules:
      Data.CSS.Syntax.Tokens
 
+  other-modules:
+     Data.CSS.Syntax.Tokenizer.Types
+
   build-depends:
      base >=4 && <4.9
    , attoparsec >= 0.13
