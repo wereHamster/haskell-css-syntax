@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Data.CSS.Syntax.Tokens
+module Data.CSS.Syntax.Tokenizer
     ( Token(..)
     , NumericValue(..)
     , HashFlag(..)

@@ -6,7 +6,7 @@ import           Control.Monad
 import           Criterion.Main
 import           System.Directory
 import qualified Data.Text.IO as T
-import           Data.CSS.Syntax.Tokens
+import           Data.CSS.Syntax.Tokenizer
 
 
 

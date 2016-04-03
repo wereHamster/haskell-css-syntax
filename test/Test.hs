@@ -4,7 +4,7 @@ module Main where
 
 
 import           Data.Monoid
-import           Data.CSS.Syntax.Tokens
+import           Data.CSS.Syntax.Tokenizer
 import           Test.Hspec
 import           Prelude
 

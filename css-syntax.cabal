@@ -28,7 +28,7 @@ library
   default-language:    Haskell2010
 
   exposed-modules:
-     Data.CSS.Syntax.Tokens
+     Data.CSS.Syntax.Tokenizer
 
   other-modules:
      Data.CSS.Syntax.Tokenizer.Types
