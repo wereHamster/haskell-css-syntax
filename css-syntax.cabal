@@ -1,5 +1,5 @@
 name:                css-syntax
-version:             0.0.4
+version:             0.0.5
 
 synopsis: This package implments a parser for the CSS syntax
 description:
