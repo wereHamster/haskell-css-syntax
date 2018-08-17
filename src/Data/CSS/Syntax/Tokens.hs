@@ -262,16 +262,18 @@ whenNext c a = do
 parseString :: Char -> Parser Token
 parseString endingCodePoint = do
     _ <- AP.char endingCodePoint
-    go mempty
+    go []
 
   where
     go acc = choice
-        [ (AP.endOfInput <|> void (AP.char endingCodePoint)) *> return (String endingCodePoint acc)
+        [ (AP.endOfInput <|> void (AP.char endingCodePoint)) *> return (String endingCodePoint $ fromAcc acc)
         , AP.string "\\\n" *> go acc
-        , whenNext '\n' (BadString endingCodePoint acc)
-        , nextInputCodePoint >>= \ch -> go (acc <> T.singleton ch)
+        , whenNext '\n' (BadString endingCodePoint $ fromAcc acc)
+        , nextInputCodePoint >>= \ch -> go (ch:acc)
         ]
 
+fromAcc :: [Char] -> Text
+fromAcc = T.pack . reverse
 
 parseHash :: Parser Token
 parseHash = do
@@ -365,22 +367,22 @@ parseNumericValue = do
 parseUrl :: Parser Token
 parseUrl = do
     _ <- AP.takeWhile isWhitespace
-    go mempty
+    go []
 
   where
-    endOfUrl acc = (AP.endOfInput <|> void (AP.char ')')) *> return (Url acc)
+    endOfUrl acc = (AP.endOfInput <|> void (AP.char ')')) *> return (Url $ fromAcc acc)
 
     go acc = choice
         [ endOfUrl acc
-        , (AP.char '"' <|> AP.char '\'' <|> AP.char '(') >>= \ch -> badUrl (acc <> T.singleton ch)
-        , AP.string "\\\n" *> badUrl (acc <> "\\\n")
-        , AP.takeWhile1 isWhitespace >>= \c -> (endOfUrl acc <|> badUrl (acc <> c))
-        , nextInputCodePoint >>= \ch -> go (acc <> T.singleton ch)
+        , (AP.char '"' <|> AP.char '\'' <|> AP.char '(') >>= \ch -> badUrl (ch:acc)
+        , AP.string "\\\n" *> badUrl ('\n':'\\':acc)
+        , AP.takeWhile1 isWhitespace >>= \c -> (endOfUrl acc <|> badUrl (reverse (T.unpack c) ++ acc))
+        , nextInputCodePoint >>= \ch -> go (ch:acc)
         ]
 
     badUrl acc = choice
-        [ (AP.endOfInput <|> void (AP.char ')')) *> return (BadUrl acc)
-        , nextInputCodePoint >>= \ch -> badUrl (acc <> T.singleton ch)
+        [ (AP.endOfInput <|> void (AP.char ')')) *> return (BadUrl $ fromAcc acc)
+        , nextInputCodePoint >>= \ch -> badUrl (ch:acc)
         ]
 
 
