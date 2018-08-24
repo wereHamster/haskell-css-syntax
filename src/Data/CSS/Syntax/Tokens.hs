@@ -201,17 +201,27 @@ renderString = T.pack . concatMap f . T.unpack
 parseComment :: Parser ()
 parseComment = do
     void $ AP.string "/*"
-    void $ AP.manyTill' AP.anyChar (void (AP.string "*/") <|> AP.endOfInput)
+    go
+    where go = do
+              AP.skipWhile (/= '*')
+              s <- AP.takeWhile (== '*')
+              when (T.length s > 0) -- not the end of input
+                   (skipChar '/' <|> go)
+
 
 parseWhitespace :: Parser Token
 parseWhitespace = do
-    void $ AP.takeWhile1 isWhitespace
+    AP.skip isWhitespace
+    AP.skipWhile isWhitespace
     return Whitespace
 
 parseChar :: Token -> Char -> Parser Token
 parseChar t c = do
-    _ <- AP.char c
+    skipChar c
     return t
+
+skipChar :: Char -> Parser ()
+skipChar c = AP.skip (== c)
 
 parseStr :: Token -> Text -> Parser Token
 parseStr t str = AP.string str *> return t
@@ -224,7 +234,7 @@ escapedCodePoint = do
         Just ch -> do
          if isHexChar ch
           then do
-            (t, _) <- AP.runScanner [] f
+            (t, _) <- AP.runScanner 0 f
             case unhex (T.unpack t) of
                 Nothing -> fail $ "escapedCodePoint: unable to parse hex " ++ (T.unpack t)
                 Just cp -> do
@@ -240,15 +250,11 @@ escapedCodePoint = do
                 else AP.anyChar >> return ch
 
   where
-    f :: String -> Char -> Maybe String
-    f acc c =
-        if length acc < 6 && isHexChar c
-            then Just $ c:acc
+    f :: Int -> Char -> Maybe Int
+    f n c =
+        if n < 6 && isHexChar c
+            then Just (n + 1)
             else Nothing
-
-
-nextInputCodePoint :: Parser Char
-nextInputCodePoint = escapedCodePoint' <|> AP.anyChar
 
 
 whenNext :: Char -> a -> Parser a
@@ -261,23 +267,26 @@ whenNext c a = do
 -- 4.3.4. Consume a string token
 parseString :: Char -> Parser Token
 parseString endingCodePoint = do
-    _ <- AP.char endingCodePoint
+    skipChar endingCodePoint
     go []
 
   where
-    go acc = choice
-        [ (AP.endOfInput <|> void (AP.char endingCodePoint)) *> return (String endingCodePoint $ fromAcc acc)
-        , AP.string "\\\n" *> go acc
+    go acc = do
+        s <- AP.takeWhile (\ c -> c /= endingCodePoint && c /= '\\' && c /= '\n')
+        go' (s:acc)
+    go' acc = choice
+        [ (skipChar endingCodePoint <|> AP.endOfInput) *> return (String endingCodePoint $ fromAcc acc)
+        , AP.string "\\\n" *> go acc -- why?
         , whenNext '\n' (BadString endingCodePoint $ fromAcc acc)
-        , nextInputCodePoint >>= \ch -> go (ch:acc)
+        , escapedCodePoint' >>= \ch -> go (T.singleton ch:acc)
         ]
 
-fromAcc :: [Char] -> Text
-fromAcc = T.pack . reverse
+fromAcc :: [T.Text] -> Text
+fromAcc = T.concat . reverse
 
 parseHash :: Parser Token
 parseHash = do
-    _ <- AP.char '#'
+    skipChar '#'
     name <- parseName
     return $ Hash HId name
 
@@ -296,7 +305,7 @@ parseNumeric = do
         unit <- parseName
         return $ Dimension repr nv unit
     pctNum repr nv = do
-        _ <- AP.char '%'
+        skipChar '%'
         return $ Percentage repr nv
 
 nameCodePoint :: Parser Char
@@ -304,7 +313,7 @@ nameCodePoint = AP.satisfy isNameCodePoint
 
 escapedCodePoint' :: Parser Char
 escapedCodePoint' = do
-    _ <- AP.char '\\'
+    skipChar '\\'
     escapedCodePoint
 
 parseName :: Parser Text
@@ -342,7 +351,7 @@ parseNumericValue = do
     -- Decimal dot and digits after it. If the decimal dot is there then it
     -- MUST be followed by one or more digits. This is not allowed: "1.".
     (fS, f, fB) <- option ("", 0, False) $ do
-        _ <- AP.char '.'
+        skipChar '.'
         digits <- AP.takeWhile1 isDigit
         return ("." <> digits, read $ T.unpack digits, True)
 
@@ -366,23 +375,31 @@ parseNumericValue = do
 
 parseUrl :: Parser Token
 parseUrl = do
-    _ <- AP.takeWhile isWhitespace
+    AP.skipWhile isWhitespace
     go []
 
   where
-    endOfUrl acc = (AP.endOfInput <|> void (AP.char ')')) *> return (Url $ fromAcc acc)
+    endOfUrl acc =
+        (skipChar ')' <|> AP.endOfInput) *> return (Url $ fromAcc acc)
 
-    go acc = choice
+    go acc = do
+        u <- AP.takeWhile (\ c -> c /= ')' && c /= '\\' && not (bad c || isWhitespace c))
+        go' (u:acc)
+    go' acc = choice
         [ endOfUrl acc
-        , (AP.char '"' <|> AP.char '\'' <|> AP.char '(') >>= \ch -> badUrl (ch:acc)
-        , AP.string "\\\n" *> badUrl ('\n':'\\':acc)
-        , AP.takeWhile1 isWhitespace >>= \c -> (endOfUrl acc <|> badUrl (reverse (T.unpack c) ++ acc))
-        , nextInputCodePoint >>= \ch -> go (ch:acc)
+        , AP.satisfy bad >>= \ch -> badUrl (T.singleton ch:acc)
+        , AP.string "\\\n" *> badUrl ("\\\n":acc)
+        , AP.takeWhile1 isWhitespace >>= \c -> (endOfUrl acc <|> badUrl (c:acc))
+        , escapedCodePoint' >>= \ch -> go (T.singleton ch:acc)
         ]
+    bad c = c == '"' || c == '\'' || c == '('
 
-    badUrl acc = choice
-        [ (AP.endOfInput <|> void (AP.char ')')) *> return (BadUrl $ fromAcc acc)
-        , nextInputCodePoint >>= \ch -> badUrl (ch:acc)
+    badUrl acc = do
+        u <- AP.takeWhile (\ c -> c /= ')' && c /= '\\')
+        badUrl' (u:acc)
+    badUrl' acc = choice
+        [ (skipChar ')' <|> AP.endOfInput) *> return (BadUrl $ fromAcc acc)
+        , escapedCodePoint' >>= \ch -> badUrl (T.singleton ch:acc)
         ]
 
 
@@ -395,12 +412,12 @@ parseIdentLike = do
             -- functions, they have their own Token type).
             guard $ T.isPrefixOf "url" (T.map toLower name)
 
-            void $ AP.char '('
-            void $ AP.takeWhile isWhitespace
+            skipChar '('
+            AP.skipWhile isWhitespace
 
             whenNext '"' (Function name) <|> whenNext '\'' (Function name) <|> parseUrl
 
-        , AP.char '(' *> return (Function name)
+        , skipChar '(' *> return (Function name)
         , return (Ident name)
         ]
 
@@ -414,13 +431,13 @@ parseEscapedIdentLike = do
 
 parseAtKeyword :: Parser Token
 parseAtKeyword = do
-    _ <- AP.char '@'
+    skipChar '@'
     name <- parseName
     return $ AtKeyword name
 
 
 parseToken :: Parser Token
-parseToken = AP.many' parseComment *> choice
+parseToken = AP.skipMany parseComment *> choice
     [ parseWhitespace
 
     , AP.string "<!--" *> return CDO
