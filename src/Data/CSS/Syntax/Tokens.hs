@@ -421,7 +421,7 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
             -- ident like
             (parseName -> Just n) -> do
                 (name, d', ts) <- mkText dst d n
-                if T.map toLower name == "url" then
+                if isUrl name then
                     -- Special handling of url() functions (they are not really
                     -- functions, they have their own Token type).
                     case ts of
@@ -452,6 +452,13 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
             _ -> return (dst, reverse acc)
 
             where token !t ts = go (t : acc) d ts
+
+        isUrl t@(Text _ _ 3)
+            | u :. r :. l :. _ <- t =
+                (u == 'u' || u == 'U') &&
+                (r == 'r' || r == 'R') &&
+                (l == 'l' || l == 'L')
+        isUrl _ = False
 
         parseString endingCodePoint acc d0 = string d0
             where string d t = case t of
