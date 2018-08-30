@@ -289,15 +289,22 @@ escapedCodePoint t = case t of
               where m = c - 0x10000
                     lo = unsafeChr $ (m `shiftR` 10) + 0xD800
                     hi = unsafeChr $ (m .&. 0x3FF) + 0xDC00
-          safe x
-              | x == 0 || x > 0x10FFFF   = 0xFFFD
-              | x .&. 0x1ff800 /= 0xd800 = x -- UTF16 surrogate code point
-              | otherwise                = 0xFFFD
-          hex c
-              | c >= '0' && c <= '9' = Just (ord c - ord '0')
-              | c >= 'a' && c <= 'f' = Just (ord c - ord 'a' + 10)
-              | c >= 'A' && c <= 'F' = Just (ord c - ord 'A' + 10)
-              | otherwise            = Nothing
+
+safe :: Int -> Int
+safe x
+    | x == 0 || x > 0x10FFFF   = 0xFFFD
+    | x .&. 0x1ff800 /= 0xd800 = x
+    | otherwise                = 0xFFFD -- UTF16 surrogate code point
+
+hex :: Char -> Maybe Int
+hex c
+    | c >= '0' && c <= '9' = Just (ord c - ord '0')
+    | c >= 'a' && c <= 'f' = Just (ord c - ord 'a' + 10)
+    | c >= 'A' && c <= 'F' = Just (ord c - ord 'A' + 10)
+    | otherwise            = Nothing
+
+{-# INLINE safe #-}
+{-# INLINE hex #-}
 
 escapedCodePoint' :: Text -> Maybe (Writer' s)
 escapedCodePoint' ('\\' :. ts) = escapedCodePoint ts
@@ -316,12 +323,14 @@ nameCodePoint (c :. ts) | isNameCodePoint c =
     Just (\ dst d -> write dst d c >> return (d+1), ts)
 nameCodePoint _ = Nothing
 
+codePoint :: Text -> Maybe (Writer' s)
+codePoint ts = nameCodePoint ts <|> escapedCodePoint' ts
+
 parseName :: Text -> Maybe (Writer s)
 parseName t = case t of
     '-' :. ts -> getName' <$> codePoint ts
     ts -> getName <$> codePoint ts
-    where codePoint ts = nameCodePoint ts <|> escapedCodePoint' ts
-          getName' n dst d = do
+    where getName' n dst d = do
               write dst d '-'
               getName n dst (d + 1)
           getName (w, ts') dst d = do
@@ -333,6 +342,11 @@ parseName t = case t of
                   loop ts' dst d'
               Nothing -> return (d, ts)
 
+{-# INLINE parseName #-}
+{-# INLINE nameCodePoint #-}
+{-# INLINE escapedCodePoint #-}
+{-# INLINE escapedCodePoint' #-}
+{-# INLINE codePoint #-}
 
 parseNumericValue :: Text -> Maybe (Text, NumericValue, Text)
 parseNumericValue t0@(Text a offs1 _) = case withSign start t0 of
