@@ -16,6 +16,8 @@ import           Control.Applicative
 import           Control.Monad
 
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Builder as TLB
 import           Data.Monoid
 import           Data.Char
 import           Data.Scientific
@@ -181,55 +183,61 @@ withNewA len act = Text a 0 l
 --
 -- https://drafts.csswg.org/css-syntax/#serialization
 
+-- TODO: serialization must insert /**/ between adjacent idents
+-- (look at the table in the linked section)
+
 serialize :: [Token] -> Text
-serialize = mconcat . map renderToken
+serialize = TL.toStrict . TLB.toLazyText . foldr (<>) "" . map renderToken
 
 
-renderToken :: Token -> Text
-renderToken (Whitespace)         = " "
+renderToken :: Token -> TLB.Builder
+renderToken token = case token of
+    Whitespace         -> " "
 
-renderToken (CDO)                = "<!--"
-renderToken (CDC)                = "-->"
+    CDO                -> "<!--"
+    CDC                -> "-->"
 
-renderToken (Comma)              = ","
-renderToken (Colon)              = ":"
-renderToken (Semicolon)          = ";"
+    Comma              -> ","
+    Colon              -> ":"
+    Semicolon          -> ";"
 
-renderToken (LeftParen)          = "("
-renderToken (RightParen)         = ")"
-renderToken (LeftSquareBracket)  = "["
-renderToken (RightSquareBracket) = "]"
-renderToken (LeftCurlyBracket)   = "{"
-renderToken (RightCurlyBracket)  = "}"
+    LeftParen          -> "("
+    RightParen         -> ")"
+    LeftSquareBracket  -> "["
+    RightSquareBracket -> "]"
+    LeftCurlyBracket   -> "{"
+    RightCurlyBracket  -> "}"
 
-renderToken (SuffixMatch)        = "$="
-renderToken (SubstringMatch)     = "*="
-renderToken (PrefixMatch)        = "^="
-renderToken (DashMatch)          = "|="
-renderToken (IncludeMatch)       = "~="
+    SuffixMatch        -> "$="
+    SubstringMatch     -> "*="
+    PrefixMatch        -> "^="
+    DashMatch          -> "|="
+    IncludeMatch       -> "~="
 
-renderToken (Column)             = "||"
+    Column             -> "||"
 
-renderToken (String d x)         = T.singleton d <> renderString x <> T.singleton d
-renderToken (BadString d x)      = T.singleton d <> renderString x <> T.singleton d
+    String d x         ->
+        TLB.singleton d <> t (renderString x) <> TLB.singleton d
+    BadString d x      ->
+        TLB.singleton d <> t (renderString x) <> TLB.singleton d
 
-renderToken (Number x _)         = x
-renderToken (Percentage x _)     = x <> "%"
-renderToken (Dimension x _ u)    = x <> u
+    Number x _         -> t x
+    Percentage x _     -> t x <> "%"
+    Dimension x _ u    -> t x <> t u
 
-renderToken (Url x)              = "url(" <> x <> ")"
-renderToken (BadUrl x)           = "url(" <> x <> ")"
+    Url x              -> "url(" <> t x <> ")"
+    BadUrl x           -> "url(" <> t x <> ")"
 
-renderToken (Ident x)            = x
+    Ident x            -> t x
 
-renderToken (AtKeyword x)        = "@" <> x
+    AtKeyword x        -> "@" <> t x
 
-renderToken (Function x)         = x <> "("
+    Function x         -> t x <> "("
 
-renderToken (Hash _ x)           = "#" <> x
+    Hash _ x           -> "#" <> t x
 
-renderToken (Delim x)            = T.singleton x
-
+    Delim x            -> TLB.singleton x
+    where t = TLB.fromText
 
 
 renderString :: Text -> Text
@@ -274,7 +282,7 @@ escapedCodePoint t = case t of
               _ -> ret acc ts
           ret (safe -> c) ts
               | c < 0x10000 = Just
-                 (\ dst d -> write dst d (unsafeChr c) >> return (d+1), ts)
+                  (\ dst d -> write dst d (unsafeChr c) >> return (d+1), ts)
               | otherwise = Just
                   (\ dst d -> write dst d lo >> write dst (d+1) hi >> return (d+2)
                   ,ts)
