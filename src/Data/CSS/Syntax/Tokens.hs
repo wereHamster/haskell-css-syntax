@@ -185,6 +185,7 @@ withNewA len act = Text a 0 l
 
 -- TODO: serialization must insert /**/ between adjacent idents
 -- (look at the table in the linked section)
+-- TODO: escape names and urls
 
 serialize :: [Token] -> Text
 serialize = TL.toStrict . TLB.toLazyText . foldr (<>) "" . map renderToken
@@ -354,16 +355,16 @@ parseNumericValue t0@(Text a offs1 _) = case withSign start t0 of
         Just (Text a offs1 (offs2 - offs1), nv, ts)
     Nothing -> Nothing
     where start sign t = case t of
-              '.' :. (digit -> Just d) :. ts -> dot sign d (-1) ts
-              (digit -> Just d) :. ts        -> digits sign d ts
+              '.' :. (digit -> Just d) :. ts -> dot sign (startIR d) (-1) ts
+              (digit -> Just d) :. ts        -> digits sign (startIR d) ts
               _ -> Nothing
           digits sign !c t = case t of
-              '.' :. (digit -> Just d) :. ts -> dot sign (c*10 + d) (-1) ts
-              (digit -> Just d) :. ts        -> digits sign (c*10 + d) ts
-              _ -> Just $ expn NVInteger (sign c) 0 t
+              '.' :. (digit -> Just d) :. ts -> dot sign (accIR c d) (-1) ts
+              (digit -> Just d) :. ts        -> digits sign (accIR c d) ts
+              _ -> Just $ expn NVInteger (sign $ readIR c) 0 t
           dot sign !c !e t = case t of
-              (digit -> Just d) :. ts        -> dot sign (c*10 + d) (e-1) ts
-              _ -> Just $ expn NVNumber (sign c) e t
+              (digit -> Just d) :. ts        -> dot sign (accIR c d) (e-1) ts
+              _ -> Just $ expn NVNumber (sign $ readIR c) e t
           expn f c e0 t = case t of
               x :. ts
                   | x == 'e' || x == 'E'
@@ -386,6 +387,50 @@ parseNumericValue t0@(Text a offs1 _) = case withSign start t0 of
               '-' :. ts -> f negate ts
               _ -> f id t
 
+-- Idea stolen from GHC implementation of `instance Read Integer`
+-- http://hackage.haskell.org/package/base-4.11.1.0/docs/src/Text.Read.Lex.html#valInteger
+-- A sub-quadratic algorithm for converting digits to Integer.
+-- First we collect blocks of `blockDigits`-digit Integers
+-- (so we don't do anything besides simple (acc*10+digit) on most inputs).
+-- Then we combine them:
+-- Pairs of adjacent radix b digits are combined into a single radix b^2 digit.
+-- This process is repeated until we are left with a single digit.
+
+blockDigits :: Int
+blockDigits = 40
+
+startBase :: Integer
+startBase = 10^blockDigits
+
+-- | (num digits in current block, blocks, current block's value)
+type IntegerReader = (Int, [Integer], Integer)
+
+startIR :: Integer -> IntegerReader
+startIR d = (1, [], d)
+
+{-# INLINE startIR #-}
+{-# INLINE accIR #-}
+{-# INLINE readIR #-}
+
+accIR :: IntegerReader -> Integer -> IntegerReader
+accIR (n, blocks, !cd) d
+    | n < blockDigits = (n+1, blocks, cd*10 + d)
+    | otherwise = (1, cd:blocks, d)
+
+readIR :: IntegerReader -> Integer
+readIR (_, [], cd) = cd
+readIR (n, blocks, cd) =
+    go startBase ((cd * padding):blocks) `div` padding
+    where padding = 10^(blockDigits-n)
+          go :: Integer -> [Integer] -> Integer
+          go _ [] = 0
+          go _ [x] = x
+          go b xs = go (b*b) (combine b xs)
+          combine :: Integer -> [Integer] -> [Integer]
+          combine _ [] = []
+          combine _ [x] = [x]
+          combine b (x0:x1:xs) = x' : combine b xs
+              where !x' = x0 + x1*b
 
 skipComment :: Text -> Text
 skipComment t = case t of
