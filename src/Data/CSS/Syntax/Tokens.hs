@@ -59,15 +59,15 @@ data Token
 
     | Column
 
-    | String !Char !Text
-    | BadString !Char !Text
+    | String !Text
+    | BadString
 
     | Number !Text !NumericValue
     | Percentage !Text !NumericValue
     | Dimension !Text !NumericValue !Unit
 
     | Url !Text
-    | BadUrl !Text
+    | BadUrl
 
     | Ident !Text
 
@@ -149,9 +149,27 @@ uncons (Text src offs len)
       Just (w2c (A.unsafeIndex src offs), Text src (offs+1) (len-1))
 {-# INLINE uncons #-}
 
+-- | write 16bit character
 write :: A.MArray s -> Int -> Char -> ST s ()
 write dst d x = A.unsafeWrite dst d (c2w x)
 {-# INLINE write #-}
+
+-- | write character that could have more than 16bit
+-- code from Data.Text.Internal.Unsafe.Char.unsafeWrite
+writeChar :: A.MArray s -> Int -> Char -> ST s Int
+writeChar dst d c
+    | n < 0x10000 = do
+        A.unsafeWrite dst d (fromIntegral n)
+        return (d+1)
+    | otherwise = do
+        A.unsafeWrite dst d lo
+        A.unsafeWrite dst (d+1) hi
+        return (d+2)
+    where n = ord c
+          m = n - 0x10000
+          lo = fromIntegral $ (m `shiftR` 10) + 0xD800
+          hi = fromIntegral $ (m .&. 0x3FF) + 0xDC00
+{-# INLINE writeChar #-}
 
 type Writer' s = (A.MArray s -> Int -> ST s Int, Text)
 type Writer s = A.MArray s -> Int -> ST s (Int, Text)
@@ -177,18 +195,70 @@ withNewA len act = Text a 0 l
 -------------------------------------------------------------------------------
 
 
--- | Serialize a list of 'Token's back into 'Text'. Round-tripping is not
--- guaranteed to be identity. The tokenization step drops some information
--- from the source.
+-- | Serialize a list of 'Token's back into 'Text'.
+--
+-- Serialization "round-trips" with parsing:
+--
+--   tokenize (serialize (tokenize s)) == tokenize s
 --
 -- https://drafts.csswg.org/css-syntax/#serialization
 
--- TODO: serialization must insert /**/ between adjacent idents
--- (look at the table in the linked section)
--- TODO: escape names and urls
 
 serialize :: [Token] -> Text
-serialize = TL.toStrict . TLB.toLazyText . foldr (<>) "" . map renderToken
+serialize = TL.toStrict . TLB.toLazyText . go
+    where go [] = ""
+          go [Delim '\\'] = "\\" -- do not add newline in last token
+          go [x] = renderToken x
+          go (x:xs@(y:_))
+              | needComment x y = renderToken x <> "/**/" <> go xs
+              | otherwise = renderToken x <> go xs
+
+
+needComment :: Token -> Token -> Bool
+needComment a CDC = case a of
+    -- Can't be parsed that way but may exists in generated `Token` list.
+    -- It's also possible to make Delim 'a' which will be parsed as Ident
+    -- but we can't do much in this case since it's impossible to
+    -- create Delim 'a' tokens in parser.
+    Delim '@' -> True
+    Delim '#' -> True
+    Delim '-' -> True
+    Number {} -> True
+    Dimension {} -> True
+    Ident _ -> True
+    AtKeyword _ -> True
+    Function _ -> True
+    Hash {} -> True
+    _ -> False
+needComment a b = case a of
+    Whitespace    -> b == Whitespace
+    Ident _       -> idn || b == CDC || b == LeftParen
+    AtKeyword _   -> idn || b == CDC
+    Hash {}       -> idn || b == CDC
+    Dimension {}  -> idn || b == CDC
+    Delim '#'     -> idn
+    Delim '-'     -> idn
+    Number {}     -> i || num || b == Delim '%'
+    Delim '@'     -> i || b == Delim '-'
+    Delim '.'     -> num
+    Delim '+'     -> num
+    Delim '/'     -> b == Delim '*' || b == SubstringMatch
+    Delim '|'     -> b == Delim '|' || b == Column || b == DashMatch
+    Delim c       -> b == Delim '='
+        && (c == '$' || c == '*' || c == '^' || c == '|' || c == '~')
+    _             -> False
+    where idn = i || b == Delim '-' || num
+          i = case b of
+              Ident _ -> True
+              Function _ -> True
+              Url _ -> True
+              BadUrl -> True
+              _ -> False
+          num = case b of
+              Number {} -> True
+              Percentage {} -> True
+              Dimension {} -> True
+              _ -> False
 
 
 renderToken :: Token -> TLB.Builder
@@ -217,64 +287,126 @@ renderToken token = case token of
 
     Column             -> "||"
 
-    String d x         ->
-        TLB.singleton d <> t (renderString x) <> TLB.singleton d
-    BadString d x      ->
-        TLB.singleton d <> t (renderString x) <> TLB.singleton d
+    String x           -> string x
+    BadString          -> "\"\n"
 
     Number x _         -> t x
     Percentage x _     -> t x <> "%"
-    Dimension x _ u    -> t x <> t u
+    Dimension x _ u    -> t x <> t (renderDimensionUnit x u)
 
-    Url x              -> "url(" <> t x <> ")"
-    BadUrl x           -> "url(" <> t x <> ")"
+    Url x              -> "url(" <> t (renderUnrestrictedHash x) <> ")"
+    BadUrl             -> "url(()"
 
-    Ident x            -> t x
+    Ident x            -> ident x
 
-    AtKeyword x        -> "@" <> t x
+    AtKeyword x        -> "@" <> ident x
 
-    Function x         -> t x <> "("
+    Function x         -> ident x <> "("
 
-    Hash _ x           -> "#" <> t x
+    Hash HId x           -> "#" <> ident x
+    Hash HUnrestricted x -> "#" <> t (renderUnrestrictedHash x)
 
+    Delim '\\'         -> "\\\n"
     Delim x            -> TLB.singleton x
     where t = TLB.fromText
+          q = TLB.singleton '"'
+          string x = q <> t (renderString x) <> q
+          ident = t . renderIdent
 
+-- https://www.w3.org/TR/cssom-1/#serialize-a-string
 
 renderString :: Text -> Text
 renderString t0@(Text _ _ l)
-    | T.any needEscape t0 = withNewA (l*7) $ go t0 0
+    | T.any needEscape t0 = withNewA (l*8) $ go t0 0
     | otherwise = t0
   where
+    needEscape c = c <= '\x1F' || c == '\x7F' || c == '"' || c == '\\'
     go t d dst = case T.uncons t of
         Nothing -> return d
         Just (c, t')
-            | needEscape c -> do
-                write dst d '\\'
-                d' <- foldM (\ o x -> write dst o x >> return (d+1))
-                    (d+1) (showHex (ord c) [])
+            | c == '\x0' -> do
+                d' <- escapeAsCodePoint dst d '\xFFFD'
                 go t' d' dst
+            | (c >= '\x1' && c <= '\x1F') || c == '\x7F' -> do
+                d' <- escapeAsCodePoint dst d c
+                go t' d' dst
+            | c == '"' || c == '\\' -> do
+                -- strings are always in double quotes, so '\'' aren't escaped
+                write dst d '\\'
+                write dst (d+1) c
+                go t' (d+2) dst
             | otherwise -> do
-                write dst d c
-                go t' (d+1) dst
+                d' <- writeChar dst d c
+                go t' d' dst
 
-    needEscape c = nonPrintableCodePoint c || nonASCIICodePoint c
-    nonPrintableCodePoint c
-        | c >= '\x0000' && c <= '\x0008' = True -- NULL through BACKSPACE
-        | c == '\x000B'                  = True -- LINE TABULATION
-        | c >= '\x000E' && c <= '\x001F' = True -- SHIFT OUT through INFORMATION SEPARATOR ONE
-        | c == '\x007F'                  = True -- DELETE
-        | otherwise                      = False
+renderDimensionUnit :: Text -> Text -> Text
+renderDimensionUnit num t0@(Text _ _ l)
+    | not (T.any isExponent num)
+    , c :. t' <- t0
+    , isExponent c && validExp t' =
+        withNewA (l*8) $ \ dst -> do
+            d' <- escapeAsCodePoint dst 0 c
+            renderUnrestrictedHash' t' d' dst
+    | otherwise =
+        renderIdent t0
+    where validExp (s :. d :. _) | (s == '+' || s == '-') = isDigit d
+          validExp (d :. _) = isDigit d
+          validExp _ = False
 
-    nonASCIICodePoint c = c >= '\x0080' -- control
+renderIdent :: Text -> Text
+renderIdent "-" = "\\-"
+renderIdent t0@(Text _ _ l) = case t0 of
+    c :. t'
+        | isDigit c -> withNewA (l*8) $ \ dst -> do
+            d' <- escapeAsCodePoint dst 0 c
+            renderUnrestrictedHash' t' d' dst
+    '-' :. c :. t'
+        | isDigit c -> withNewA (l*8) $ \ dst -> do
+            write dst 0 '-'
+            d' <- escapeAsCodePoint dst 1 c
+            renderUnrestrictedHash' t' d' dst
+    _ -> renderUnrestrictedHash t0
+
+renderUnrestrictedHash :: Text -> Text
+renderUnrestrictedHash t0@(Text _ _ l)
+    | T.any (not . nameCodePoint) t0 =
+        withNewA (l*8) $ renderUnrestrictedHash' t0 0
+    | otherwise = t0
+
+renderUnrestrictedHash' :: Text -> Int -> A.MArray s -> ST s Int
+renderUnrestrictedHash' = go
+    where go t d dst = case T.uncons t of
+            Nothing -> return d
+            Just (c, t')
+                | c == '\x0' -> do
+                    write dst d '\xFFFD'
+                    go t' (d+1) dst
+                | (c >= '\x1' && c <= '\x1F') || c == '\x7F' -> do
+                    d' <- escapeAsCodePoint dst d c
+                    go t' d' dst
+                | nameCodePoint c -> do
+                    d' <- writeChar dst d c
+                    go t' d' dst
+                | otherwise -> do
+                    write dst d '\\'
+                    d' <- writeChar dst (d+1) c
+                    go t' d' dst
+
+escapeAsCodePoint dst d c = do
+    write dst d '\\'
+    d' <- foldM (\ o x -> write dst o x >> return (o+1))
+        (d+1) (showHex (ord c) [])
+    write dst d' ' '
+    return (d' + 1)
 
 
+-- | verify valid escape and consume escaped code point
 escapedCodePoint :: Text -> Maybe (Writer' s)
 escapedCodePoint t = case t of
     (hex -> Just d) :. ts -> go 5 d ts
     '\n' :. _ -> Nothing
     c :. ts -> Just (\ dst d -> write dst d c >> return (d+1), ts)
-    _ -> Just (\ dst d -> write dst d '\xFFFD' >> return (d+1), t)
+    _ -> Nothing
     where go :: Int -> Int -> Text -> Maybe (Writer' s)
           go 0 acc ts = ret acc ts
           go n acc ts = case ts of
@@ -311,43 +443,47 @@ escapedCodePoint' :: Text -> Maybe (Writer' s)
 escapedCodePoint' ('\\' :. ts) = escapedCodePoint ts
 escapedCodePoint' _ = Nothing
 
-isNameStartCodePoint :: Char -> Bool
-isNameStartCodePoint c =
-    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-    c >= '\x0080' || c == '_'
+nameStartCodePoint :: Char -> Bool
+nameStartCodePoint c =
+    isAsciiLower c || isAsciiUpper c || c >= '\x0080' || c == '_'
 
-isNameCodePoint :: Char -> Bool
-isNameCodePoint c = isNameStartCodePoint c || (c >= '0' && c <= '9') || c == '-'
+nameCodePoint :: Char -> Bool
+nameCodePoint c = nameStartCodePoint c || isDigit c || c == '-'
 
-nameCodePoint :: Text -> Maybe (Writer' s)
-nameCodePoint (c :. ts) | isNameCodePoint c =
+satisfy :: (Char -> Bool) -> Text -> Maybe (Writer' s)
+satisfy pred (c :. ts) | pred c =
     Just (\ dst d -> write dst d c >> return (d+1), ts)
-nameCodePoint _ = Nothing
+satisfy _ _ = Nothing
 
-codePoint :: Text -> Maybe (Writer' s)
-codePoint ts = nameCodePoint ts <|> escapedCodePoint' ts
+satisfyOrEscaped :: (Char -> Bool) -> Text -> Maybe (Writer' s)
+satisfyOrEscaped p t = satisfy p t <|> escapedCodePoint' t
 
+-- | Check if three code points would start an identifier and consume name
 parseName :: Text -> Maybe (Writer s)
 parseName t = case t of
-    '-' :. ts -> getName' <$> codePoint ts
-    ts -> getName <$> codePoint ts
-    where getName' n dst d = do
+    '-' :. ts -> consumeName' <$> satisfyOrEscaped (\ c -> nameStartCodePoint c || c == '-') ts
+    ts -> consumeName <$> satisfyOrEscaped nameStartCodePoint ts
+    where consumeName' n dst d = do
               write dst d '-'
-              getName n dst (d + 1)
-          getName (w, ts') dst d = do
-              d' <- w dst d
-              loop ts' dst d'
-          loop ts dst d = case codePoint ts of
+              consumeName n dst (d + 1)
+
+
+consumeName :: Writer' s -> Writer s
+consumeName (w, ts') dst d = do
+    d' <- w dst d
+    loop ts' dst d'
+    where loop ts dst d = case satisfyOrEscaped nameCodePoint ts of
               Just (w, ts') -> do
                   d' <- w dst d
                   loop ts' dst d'
               Nothing -> return (d, ts)
 
 {-# INLINE parseName #-}
-{-# INLINE nameCodePoint #-}
+{-# INLINE satisfy #-}
+{-# INLINE satisfyOrEscaped #-}
 {-# INLINE escapedCodePoint #-}
 {-# INLINE escapedCodePoint' #-}
-{-# INLINE codePoint #-}
+{-# INLINE consumeName #-}
 
 parseNumericValue :: Text -> Maybe (Text, NumericValue, Text)
 parseNumericValue t0@(Text a offs1 _) = case withSign start t0 of
@@ -367,7 +503,7 @@ parseNumericValue t0@(Text a offs1 _) = case withSign start t0 of
               _ -> Just $ expn NVNumber (sign $ readIR c) e t
           expn f c e0 t = case t of
               x :. ts
-                  | x == 'e' || x == 'E'
+                  | isExponent x
                   , Just r <- withSign (expStart c e0 0) ts -> r
               _ -> (f $ scientific c e0, t)
           expStart c e0 e sign t = case t of
@@ -378,7 +514,7 @@ parseNumericValue t0@(Text a offs1 _) = case withSign start t0 of
               _ -> Just (NVNumber $ scientific c (sign e + e0), t)
           digit :: Enum a => Char -> Maybe a
           digit c
-              | c >= '0' && c <= '9' = Just (toEnum $ ord c - ord '0')
+              | isDigit c = Just (toEnum $ ord c - ord '0')
               | otherwise = Nothing
           withSign :: Num a => ((a -> a) -> Text -> Maybe (b, Text))
                    -> Text -> Maybe (b, Text)
@@ -514,6 +650,10 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
                 (name, d', ts) <- mkText dst d n
                 go' (Hash HId name) acc d' ts
 
+            '#' :. (satisfyOrEscaped nameCodePoint -> Just n) -> do
+                (name, d', ts) <- mkText dst d (consumeName n)
+                go' (Hash HUnrestricted name) acc d' ts
+
             c :. ts ->
                 token (Delim c) ts
             _ -> return (dst, reverse acc)
@@ -527,65 +667,64 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
                 (l == 'l' || l == 'L')
         isUrl _ = False
 
+        -- https://drafts.csswg.org/css-syntax-3/#consume-string-token
         parseString endingCodePoint acc d0 = string d0
             where string d t = case t of
-                      c :. ts | c == endingCodePoint -> ret String d ts
-                      '\\' :. '\n' :. ts -> string d ts
-                      '\n' :. _ -> ret BadString d t
-                      -- TODO: following code is repeated 3 times,
-                      -- generalize and profile
-                      (escapedCodePoint' -> Just (p, ts)) -> do
-                          d' <- p dst d
-                          string d' ts
+                      c :. ts | c == endingCodePoint -> ret d ts
+                      '\\' :. ts
+                          | Just (p, ts') <- escapedCodePoint ts -> do
+                              d' <- p dst d
+                              string d' ts'
+                          | '\n' :. ts' <- ts ->
+                              string d ts'
+                          | Text _ _ 0 <- ts ->
+                              string d ts
+                      '\n' :. _ -> go' BadString acc d t
                       c :. ts -> do
                           write dst d c
                           string (d+1) ts
-                      _ -> ret String d t
-                  ret f d ts =
-                      go' (f endingCodePoint (Text dsta d0 (d-d0))) acc d ts
+                      _ -> ret d t
+                  ret d t = go' (String $ Text dsta d0 (d-d0)) acc d t
+
+        -- https://drafts.csswg.org/css-syntax/#consume-url-token
         parseUrl acc d0 tUrl = url d0 (skipWhitespace tUrl)
-            where ret f d ts = go' (f (Text dsta d0 (d-d0))) acc d ts
+            where ret d ts = go' (Url (Text dsta d0 (d-d0))) acc d ts
                   url d t = case t of
-                      ')' :. ts -> ret Url d ts
+                      ')' :. ts -> ret d ts
                       c :. ts
-                          | c == '"' || c == '\'' || c == '(' -> do
-                              write dst d c
-                              badUrl (d+1) ts
-                          | isWhitespace c -> do
-                              write dst d c
-                              whitespace d (d+1) ts
-                      '\\' :. '\n' :. ts -> do
-                          write dst d '\\'
-                          write dst (d+1) '\n'
-                          badUrl (d+2) ts
-                      (escapedCodePoint' -> Just (p, ts)) -> do
-                          d' <- p dst d
-                          url d' ts
+                          | c == '"' || c == '\'' || c == '('
+                            || nonPrintableCodePoint c -> do
+                              badUrl d ts
+                          | isWhitespace c ->
+                              whitespace d ts
+                      '\\' :. ts
+                          | Just (p, ts') <- escapedCodePoint ts -> do
+                              d' <- p dst d
+                              url d' ts'
+                          | otherwise ->
+                              badUrl d ts
                       c :. ts -> do
                           write dst d c
                           url (d+1) ts
                       _ ->
-                          ret Url d t
-                  whitespace dw d t = case t of
+                          ret d t
+                  whitespace d t = case t of
                       c :. ts -> do
-                          write dst d c
                           if isWhitespace c then
-                              whitespace dw (d+1) ts
+                              whitespace d ts
                           else if c == ')' then
-                              ret Url dw ts
+                              ret d ts
                           else
-                              badUrl (d+1) ts
+                              badUrl d ts
                       _ ->
-                          ret Url dw t
+                          ret d t
                   badUrl d t = case t of
-                      ')' :. ts -> ret BadUrl d ts
-                      (escapedCodePoint' -> Just (p, ts)) -> do
-                          d' <- p dst d
-                          badUrl d' ts
-                      c :. ts -> do
-                          write dst d c
-                          badUrl (d+1) ts
-                      _ -> ret BadUrl d t
+                      ')' :. ts -> go' BadUrl acc d ts
+                      (escapedCodePoint' -> Just (_, ts)) -> do
+                          badUrl d ts
+                      c :. ts ->
+                          badUrl d ts
+                      _ -> go' BadUrl acc d t
         mkText :: A.MArray s -> Int -> Writer s -> ST s (Text, Int, Text)
         mkText dest d w = do
             (d', ts) <- w dest d
@@ -599,3 +738,13 @@ isWhitespace '\x0009' = True
 isWhitespace '\x000A' = True
 isWhitespace '\x0020' = True
 isWhitespace _        = False
+
+nonPrintableCodePoint c
+    | c >= '\x0000' && c <= '\x0008' = True -- NULL through BACKSPACE
+    | c == '\x000B'                  = True -- LINE TABULATION
+    | c >= '\x000E' && c <= '\x001F' = True -- SHIFT OUT through INFORMATION SEPARATOR ONE
+    | c == '\x007F'                  = True -- DELETE
+    | otherwise                      = False
+
+isExponent :: Char -> Bool
+isExponent c = c == 'e' || c == 'E'

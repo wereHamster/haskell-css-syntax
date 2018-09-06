@@ -1,14 +1,28 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, ViewPatterns #-}
 
 module Main where
 
 
+import qualified Data.Text as T
 import           Data.Monoid
 import           Data.CSS.Syntax.Tokens
-import           Test.Hspec
+import           Test.Hspec hiding (shouldBe)
+import qualified Test.Hspec as Hspec
+import           Test.Hspec.QuickCheck
 import           Prelude
+import           Test.QuickCheck
+import           Data.Maybe
+import           Data.Char
+import           Data.Scientific
+import           GHC.Stack
 
+shouldBe :: HasCallStack => Either String [Token] -> Either String [Token] -> Expectation
+shouldBe (Right l) (Right r) =
+    Hspec.shouldBe (tokenize $ serialize l) (Right r)
+shouldBe r l =
+    Hspec.shouldBe l r
 
+infix 1 `shouldBe`
 
 main :: IO ()
 main = hspec spec
@@ -50,8 +64,8 @@ spec = parallel $ do
         it "Escapes" $ do
             tokenize "hel\\6Co" `shouldBe` Right [Ident "hello"]
             tokenize "\\26 B" `shouldBe` Right [Ident "&B"]
-            tokenize "'hel\\6c o'" `shouldBe` Right [String '\'' "hello"]
-            tokenize "'spac\\65\r\ns'" `shouldBe` Right [String '\'' "spaces"]
+            tokenize "'hel\\6c o'" `shouldBe` Right [String "hello"]
+            tokenize "'spac\\65\r\ns'" `shouldBe` Right [String "spaces"]
             tokenize "spac\\65\r\ns" `shouldBe` Right [Ident "spaces"]
             tokenize "spac\\65\n\rs" `shouldBe` Right [Ident "space", Whitespace, Ident "s"]
             tokenize "sp\\61\tc\\65\fs" `shouldBe` Right [Ident "spaces"]
@@ -78,7 +92,7 @@ spec = parallel $ do
             tokenize "\\10fFfF" `shouldBe` Right [Ident "\x10ffff"]
             tokenize "\\10fFfF0" `shouldBe` Right [Ident $ "\x10ffff" <> "0"]
             tokenize "\\10000000" `shouldBe` Right [Ident $ "\x100000" <> "00"]
-            tokenize "eof\\" `shouldBe` Right [Ident "eof\xfffd"]
+            tokenize "eof\\" `shouldBe` Right [Ident "eof", Delim '\\']
 
         it "Ident" $ do
             tokenize "simple-ident" `shouldBe` Right [Ident "simple-ident"]
@@ -105,10 +119,10 @@ spec = parallel $ do
             tokenize "foo-bar\\ baz(" `shouldBe` Right [Function "foo-bar baz"]
             tokenize "fun\\(ction(" `shouldBe` Right [Function "fun(ction"]
             tokenize "-foo(" `shouldBe` Right [Function "-foo"]
-            tokenize "url(\"foo.gif\"" `shouldBe` Right [Function "url", String  '"' "foo.gif"]
-            tokenize "foo(  \'bar.gif\'" `shouldBe` Right [Function "foo", Whitespace, String '\'' "bar.gif"]
+            tokenize "url(\"foo.gif\"" `shouldBe` Right [Function "url", String "foo.gif"]
+            tokenize "foo(  \'bar.gif\'" `shouldBe` Right [Function "foo", Whitespace, String "bar.gif"]
             -- // To simplify implementation we drop the whitespace in function(url),whitespace,string()
-            tokenize "url(  \'bar.gif\'" `shouldBe` Right [Function "url", String '\'' "bar.gif"]
+            tokenize "url(  \'bar.gif\'" `shouldBe` Right [Function "url", String "bar.gif"]
 
         it "AtKeyword" $ do
             tokenize "@at-keyword" `shouldBe` Right [AtKeyword "at-keyword"]
@@ -120,9 +134,9 @@ spec = parallel $ do
             tokenize "@---" `shouldBe` Right [AtKeyword "---"]
             tokenize "@\\ " `shouldBe` Right [AtKeyword " "]
             tokenize "@-\\ " `shouldBe` Right [AtKeyword "- "]
-            tokenize "@@" `shouldBe` Right [ Delim '@', Delim '@']
-            -- tokenize "@2" `shouldBe` Right [  Delim '@', Number "2" (NVInteger 2)]
-            -- tokenize "@-1" `shouldBe` Right [  Delim '@', Number "-1" (NVInteger (-1))]
+            tokenize "@@" `shouldBe` Right [Delim '@', Delim '@']
+            tokenize "@2" `shouldBe` Right [Delim '@', Number "2" (NVInteger 2)]
+            tokenize "@-1" `shouldBe` Right [Delim '@', Number "-1" (NVInteger (-1))]
 
 
         it "Url" $ do
@@ -136,42 +150,43 @@ spec = parallel $ do
             tokenize "URL(eof" `shouldBe` Right [Url "eof"]
             tokenize "url(not/*a*/comment)" `shouldBe` Right [Url "not/*a*/comment"]
             tokenize "urL()" `shouldBe` Right [Url ""]
-            tokenize "uRl(white space)," `shouldBe` Right [BadUrl "white space", Comma]
-            tokenize "Url(b(ad)," `shouldBe` Right [BadUrl "b(ad", Comma]
-            tokenize "uRl(ba'd):" `shouldBe` Right [BadUrl "ba'd", Colon]
-            tokenize "urL(b\"ad):" `shouldBe` Right [BadUrl "b\"ad", Colon]
-            tokenize "uRl(b\"ad):" `shouldBe` Right [BadUrl "b\"ad", Colon]
-            tokenize "Url(b\\\rad):" `shouldBe` Right [BadUrl "b\\\nad", Colon]
-            tokenize "url(b\\\nad):" `shouldBe` Right [BadUrl "b\\\nad", Colon]
-            tokenize "url(/*'bad')*/" `shouldBe` Right [BadUrl "/*'bad'", Delim '*', Delim '/']
-            tokenize "url(ba'd\\\\))" `shouldBe` Right [BadUrl "ba'd\\", RightParen]
+            tokenize "uRl(white space)," `shouldBe` Right [BadUrl, Comma]
+            tokenize "Url(b(ad)," `shouldBe` Right [BadUrl, Comma]
+            tokenize "uRl(ba'd):" `shouldBe` Right [BadUrl, Colon]
+            tokenize "urL(b\"ad):" `shouldBe` Right [BadUrl, Colon]
+            tokenize "uRl(b\"ad):" `shouldBe` Right [BadUrl, Colon]
+            tokenize "Url(b\\\rad):" `shouldBe` Right [BadUrl, Colon]
+            tokenize "url(b\\\nad):" `shouldBe` Right [BadUrl, Colon]
+            tokenize "url(/*'bad')*/" `shouldBe` Right [BadUrl, Delim '*', Delim '/']
+            tokenize "url(ba'd\\\\))" `shouldBe` Right [BadUrl, RightParen]
 
         it "String" $ do
-            tokenize "'text'" `shouldBe` Right [String '\'' "text"]
-            tokenize "\"text\"" `shouldBe` Right [String '"' "text"]
-            tokenize "'testing, 123!'" `shouldBe` Right [String '\'' "testing, 123!"]
-            tokenize "'es\\'ca\\\"pe'" `shouldBe` Right [String '\'' "es'ca\"pe"]
-            tokenize "'\"quotes\"'" `shouldBe` Right [String '\'' "\"quotes\""]
-            tokenize "\"'quotes'\"" `shouldBe` Right [String '"' "'quotes'"]
-            tokenize "\"mismatch'" `shouldBe` Right [String '"' "mismatch'"]
-            tokenize "'text\5\t\xb'" `shouldBe` Right [String '\'' "text\5\t\xb"]
-            tokenize "\"end on eof" `shouldBe` Right [String '"' "end on eof"]
-            tokenize "'esca\\\nped'" `shouldBe` Right [String '\'' "escaped"]
-            tokenize "\"esc\\\faped\"" `shouldBe` Right [String '"' "escaped"]
-            tokenize "'new\\\rline'" `shouldBe` Right [String '\'' "newline"]
-            tokenize "\"new\\\r\nline\"" `shouldBe` Right [String '"' "newline"]
-            tokenize "'bad\nstring" `shouldBe` Right [BadString '\'' "bad", Whitespace, Ident "string"]
-            tokenize "'bad\rstring" `shouldBe` Right [BadString '\'' "bad", Whitespace, Ident "string"]
-            tokenize "'bad\r\nstring" `shouldBe` Right [BadString '\'' "bad", Whitespace, Ident "string"]
-            tokenize "'bad\fstring" `shouldBe` Right [BadString '\'' "bad", Whitespace, Ident "string"]
-            tokenize "'\0'" `shouldBe` Right [String '\'' "\xFFFD"]
-            tokenize "'hel\0lo'" `shouldBe` Right [String '\'' "hel\xfffdlo"]
-            tokenize "'h\\65l\0lo'" `shouldBe` Right [String '\'' "hel\xfffdlo"]
+            tokenize "'text'" `shouldBe` Right [String "text"]
+            tokenize "\"text\"" `shouldBe` Right [String "text"]
+            tokenize "'testing, 123!'" `shouldBe` Right [String "testing, 123!"]
+            tokenize "'es\\'ca\\\"pe'" `shouldBe` Right [String "es'ca\"pe"]
+            tokenize "'\"quotes\"'" `shouldBe` Right [String "\"quotes\""]
+            tokenize "\"'quotes'\"" `shouldBe` Right [String "'quotes'"]
+            tokenize "\"mismatch'" `shouldBe` Right [String "mismatch'"]
+            tokenize "'text\5\t\xb'" `shouldBe` Right [String "text\5\t\xb"]
+            tokenize "\"end on eof" `shouldBe` Right [String "end on eof"]
+            tokenize "'esca\\\nped'" `shouldBe` Right [String "escaped"]
+            tokenize "\"esc\\\faped\"" `shouldBe` Right [String "escaped"]
+            tokenize "'new\\\rline'" `shouldBe` Right [String "newline"]
+            tokenize "\"new\\\r\nline\"" `shouldBe` Right [String "newline"]
+            tokenize "'bad\nstring" `shouldBe` Right [BadString, Whitespace, Ident "string"]
+            tokenize "'bad\rstring" `shouldBe` Right [BadString, Whitespace, Ident "string"]
+            tokenize "'bad\r\nstring" `shouldBe` Right [BadString, Whitespace, Ident "string"]
+            tokenize "'bad\fstring" `shouldBe` Right [BadString, Whitespace, Ident "string"]
+            tokenize "'\0'" `shouldBe` Right [String "\xFFFD"]
+            tokenize "'hel\0lo'" `shouldBe` Right [String "hel\xfffdlo"]
+            tokenize "'h\\65l\0lo'" `shouldBe` Right [String "hel\xfffdlo"]
+            tokenize "'ignore backslash at eof\\" `shouldBe` Right [String "ignore backslash at eof"]
 
         it "Hash" $ do
             tokenize "#id-selector" `shouldBe` Right [Hash HId "id-selector"]
             tokenize "#FF7700" `shouldBe` Right [Hash HId "FF7700"]
-            -- tokenize "#3377FF" `shouldBe` Right [Hash HUnrestricted "3377FF"]
+            tokenize "#3377FF" `shouldBe` Right [Hash HUnrestricted "3377FF"]
             tokenize "#\\ " `shouldBe` Right [Hash HId " "]
             tokenize "# " `shouldBe` Right [Delim '#', Whitespace]
             tokenize "#\\\n" `shouldBe` Right [Delim '#', Delim '\\', Whitespace]
@@ -218,6 +233,10 @@ spec = parallel $ do
             tokenize "5e+" `shouldBe` Right [Dimension "5" (NVInteger 5) "e", Delim '+']
             tokenize "2e.5" `shouldBe` Right [Dimension "2" (NVInteger 2) "e", Number ".5" (NVNumber 0.5)]
             tokenize "2e+.5" `shouldBe` Right [Dimension "2" (NVInteger 2) "e", Number "+.5" (NVNumber 0.5)]
+            tokenize "1-2" `shouldBe` Right [Number "1" (NVInteger 1), Number "-2" (NVInteger (-2))]
+            tokenize "1\\65 1" `shouldBe` Right [Dimension "1" (NVInteger 1.0) "e1"]
+            tokenize "1\\31 em" `shouldBe` Right [Dimension "1" (NVInteger 1.0) "1em"]
+            tokenize "1e\\31 em" `shouldBe` Right [Dimension "1" (NVInteger 1.0) "e1em"]
 
         it "Percentage" $ do
             tokenize "10%" `shouldBe` Right [Percentage "10" $ NVInteger 10]
@@ -258,3 +277,114 @@ spec = parallel $ do
             tokenize ":/*/*/" `shouldBe` Right [Colon]
             tokenize "/**/*" `shouldBe` Right [Delim '*']
             tokenize ";/******" `shouldBe` Right [Semicolon]
+
+        it "Serialization" $ do
+            serialize [String "hello,\x0world"] `Hspec.shouldBe` "\"hello,\\fffd world\""
+            serialize [String "\x10\x7f\""] `Hspec.shouldBe` "\"\\10 \\7f \\\"\""
+            serialize [String "\xABCDE"] `Hspec.shouldBe` "\"\xABCDE\""
+            serialize [Ident "-"] `Hspec.shouldBe` "\\-"
+            serialize [Ident "5"] `Hspec.shouldBe` "\\35 "
+            serialize [Ident "-5"] `Hspec.shouldBe` "-\\35 "
+            serialize [Ident "-9f\\oo()"] `Hspec.shouldBe` "-\\39 f\\\\oo\\(\\)"
+            serialize [Ident "\xABCDE"] `Hspec.shouldBe` "\xABCDE"
+            serialize [Ident "a", Ident "b"] `Hspec.shouldBe` "a/**/b"
+            serialize [Dimension "1" (NVInteger 1) "em", Ident "b"] `Hspec.shouldBe` "1em/**/b"
+        modifyMaxSize (const 1000) $ modifyMaxSuccess (const 50000) $
+            prop "Tokeninze/serialize/tokenize roundtrip"
+                prop_tstRoundTrip
+        modifyMaxSize (const 100) $ modifyMaxSuccess (const 50000) $
+            prop "Tokenize/serialize roundtrip"
+                prop_tsRoundTrip
+
+prop_tstRoundTrip :: String -> Bool
+prop_tstRoundTrip s = tokenize (serialize t) == Right t
+    where Right t = tokenize $ T.pack s
+
+prop_tsRoundTrip :: TestTokens -> Bool
+prop_tsRoundTrip (TestTokens t) = tokenize (serialize t) == Right t
+
+newtype TestTokens = TestTokens [Token]
+    deriving (Show, Eq)
+
+instance Arbitrary TestTokens where
+    arbitrary = TestTokens . go <$> arbitrary
+        where go [] = []
+              go (x : xs@(Whitespace : _)) | needWhitespace x = x : go xs
+              -- we can only have [BadString, Whitespace]
+              -- or [Delim '\\', Whitespace] sequences
+              go (x : xs) | needWhitespace x = x : Whitespace : go xs
+              go (x@(Function (T.toLower -> "url")) : xs) =
+                  x : String "argument" : go xs
+              go (x : xs) = x : go xs
+              needWhitespace x = case x of
+                  BadString -> True
+                  Delim '\\' -> True
+                  _ -> False
+
+
+instance Arbitrary Token where
+    arbitrary = oneof $
+        map return
+        [ Whitespace
+        , CDO
+        , CDC
+
+        , Comma
+        , Colon
+        , Semicolon
+
+        , LeftParen
+        , RightParen
+        , LeftSquareBracket
+        , RightSquareBracket
+        , LeftCurlyBracket
+        , RightCurlyBracket
+
+        , SuffixMatch
+        , SubstringMatch
+        , PrefixMatch
+        , DashMatch
+        , IncludeMatch
+
+        , Column
+
+        , BadString
+        , BadUrl
+        ]
+        ++
+        [ String <$> text
+        , num Number
+        , num Percentage
+        , num Dimension <*> ident
+
+        , Url <$> text
+
+        , Ident <$> ident
+
+        , AtKeyword <$> ident
+
+        , Function <$> ident
+        , return $ Function "url"
+
+        , Hash HId <$> ident
+
+        , Delim <$> elements possibleDelimiters
+        ]
+        where ident = notEmpty text
+              notEmpty x = do
+                  r <- x
+                  if r /= "" then return r else notEmpty x
+              text = T.replace "\NUL" "\xFFFD" . T.pack <$> arbitrary
+              num f = do
+                  c <- arbitrary
+                  e <- arbitrary
+                  let x = scientific c e
+                      t0 = T.pack $ show x
+                      t = fromMaybe t0 $ T.stripSuffix ".0" t0
+                      n | T.any (\ x -> x == '.' || x == 'e') t = NVNumber
+                        | otherwise = NVInteger
+                  return $ f t (n x)
+              possibleDelimiters =
+                  [d | c <- ['\0'..'\xff']
+                  , Right [Delim d] <- [tokenize (T.pack [c])]]
+                  ++ ['\\']
