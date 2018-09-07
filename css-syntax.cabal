@@ -41,7 +41,7 @@ library
 test-suite spec
   hs-source-dirs:      test src
   default-language:    Haskell2010
-  ghc-options:         -Wall
+  ghc-options:         -Wall -Wno-orphans
 
   type:                exitcode-stdio-1.0
   main-is:             Test.hs
@@ -56,22 +56,24 @@ test-suite spec
 
    , hspec
    , directory
-
+   , QuickCheck
 
 benchmark benchmark
   hs-source-dirs:      benchmark src
   default-language:    Haskell2010
-  ghc-options:         -Wall -O2 -fprof-auto -rtsopts
+  ghc-options:         -Wall -Wno-orphans -O2 -fprof-auto -rtsopts
 
   type:                exitcode-stdio-1.0
   main-is:             Benchmark.hs
 
+  other-modules:
+     Data.CSS.Syntax.Tokens
+
   build-depends:
-     base >=4 && <4.9
-   , attoparsec >= 0.13
-   , bytestring
+     base >=4 && <5
    , scientific
    , text
 
    , criterion
+   , deepseq
    , directory
