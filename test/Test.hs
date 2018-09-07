@@ -10,10 +10,7 @@ import           Test.Hspec
 import           Test.Hspec.QuickCheck
 import           Prelude
 import           Test.QuickCheck
-import           Data.Maybe
-import           Data.Char
 import           Data.Scientific
-import           GHC.Stack
 
 testTokenize :: HasCallStack => T.Text -> [Token] -> Expectation
 testTokenize s t = do
@@ -217,7 +214,9 @@ spec = parallel $ do
             testTokenize "1.e2" [Number "1" (NVInteger 1), Delim '.', Ident "e2"]
             testTokenize "2e3.5" [Number "2e3" (NVNumber 2e3), Number ".5" (NVNumber 0.5)]
             testTokenize "2e3." [Number "2e3" (NVNumber 2e3), Delim '.']
-            testTokenize "1000000000000000000000000" [Number "1000000000000000000000000" (NVInteger 1e24)]
+            testTokenize "1000000000000000000000000" [Number "1000000000000000000000000" (NVInteger 1000000000000000000000000)]
+            testTokenize "123456789223456789323456789423456789523456789623456789723456789823456789923456789" [Number "123456789223456789323456789423456789523456789623456789723456789823456789923456789" (NVInteger 123456789223456789323456789423456789523456789623456789723456789823456789923456789)]
+            testTokenize "1.797693134862315708145274237317043567980705675258449965989174768031572607800285387605895586327668781715404589535143824642e308" [Number "1.797693134862315708145274237317043567980705675258449965989174768031572607800285387605895586327668781715404589535143824642e308" (NVNumber 1.797693134862315708145274237317043567980705675258449965989174768031572607800285387605895586327668781715404589535143824642e308)]
 
         it "Dimension" $ do
             testTokenize "10px" [Dimension "10" (NVInteger 10) "px"]
@@ -236,9 +235,9 @@ spec = parallel $ do
             testTokenize "2e.5" [Dimension "2" (NVInteger 2) "e", Number ".5" (NVNumber 0.5)]
             testTokenize "2e+.5" [Dimension "2" (NVInteger 2) "e", Number "+.5" (NVNumber 0.5)]
             testTokenize "1-2" [Number "1" (NVInteger 1), Number "-2" (NVInteger (-2))]
-            testTokenize "1\\65 1" [Dimension "1" (NVInteger 1.0) "e1"]
-            testTokenize "1\\31 em" [Dimension "1" (NVInteger 1.0) "1em"]
-            testTokenize "1e\\31 em" [Dimension "1" (NVInteger 1.0) "e1em"]
+            testTokenize "1\\65 1" [Dimension "1" (NVInteger 1) "e1"]
+            testTokenize "1\\31 em" [Dimension "1" (NVInteger 1) "1em"]
+            testTokenize "1e\\31 em" [Dimension "1" (NVInteger 1) "e1em"]
 
         it "Percentage" $ do
             testTokenize "10%" [Percentage "10" $ NVInteger 10]
@@ -378,15 +377,14 @@ instance Arbitrary Token where
                   r <- x
                   if r /= "" then return r else notEmpty x
               text = T.replace "\NUL" "\xFFFD" . T.pack <$> arbitrary
-              num f = do
+              num token = do
                   c <- arbitrary
                   e <- arbitrary
-                  let x = scientific c e
-                      t0 = T.pack $ show x
-                      t = fromMaybe t0 $ T.stripSuffix ".0" t0
-                      n | T.any (\ x -> x == '.' || x == 'e') t = NVNumber
-                        | otherwise = NVInteger
-                  return $ f t (n x)
+                  let (t, n)
+                          | e /= 0 = nv NVNumber (scientific c e)
+                          | otherwise = nv NVInteger c
+                      nv f x = (T.pack $ show x, f x)
+                  return $ token t n
               possibleDelimiters =
                   [d | c <- ['\0'..'\xff']
                   , [Delim d] <- [tokenize (T.pack [c])]]

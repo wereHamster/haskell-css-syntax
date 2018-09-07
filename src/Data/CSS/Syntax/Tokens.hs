@@ -84,8 +84,8 @@ data Token
 
 
 data NumericValue
-    = NVInteger !Scientific
-    | NVNumber !Scientific
+    = NVInteger !Integer   -- ^ number without dot '.' or exponent 'e'
+    | NVNumber !Scientific -- ^ number with dot '.' or exponent 'e'
     deriving (Show, Eq)
 
 data HashFlag = HId | HUnrestricted
@@ -245,9 +245,10 @@ needComment a b = case a of
     Delim '.'     -> num
     Delim '+'     -> num
     Delim '/'     -> b == Delim '*' || b == SubstringMatch
-    Delim '|'     -> b == Delim '|' || b == Column || b == DashMatch
+    Delim '|'     ->
+        b == Delim '|' || b == Delim '=' || b == Column || b == DashMatch
     Delim c       -> b == Delim '='
-        && (c == '$' || c == '*' || c == '^' || c == '|' || c == '~')
+        && (c == '$' || c == '*' || c == '^' || c == '~')
     _             -> False
     where idn = i || b == Delim '-' || num
           i = case b of
@@ -396,6 +397,7 @@ renderUnrestrictedHash' = go
                     d' <- writeChar dst (d+1) c
                     go t' d' dst
 
+escapeAsCodePoint :: A.MArray s -> Int -> Char -> ST s Int
 escapeAsCodePoint dst d c = do
     write dst d '\\'
     d' <- foldM (\ o x -> write dst o x >> return (o+1))
@@ -455,8 +457,8 @@ nameCodePoint :: Char -> Bool
 nameCodePoint c = nameStartCodePoint c || isDigit c || c == '-'
 
 satisfyOrEscaped :: (Char -> Bool) -> Text -> Maybe (Writer' s)
-satisfyOrEscaped pred (c :. ts)
-    | pred c = Just (\ dst d -> write dst d c >> return (d+1), ts)
+satisfyOrEscaped p (c :. ts)
+    | p c = Just (\ dst d -> write dst d c >> return (d+1), ts)
     | c == '\\' = escapedCodePoint ts
 satisfyOrEscaped _ _ = Nothing
 
@@ -471,13 +473,13 @@ parseName t = case t of
 
 
 consumeName :: Writer' s -> Writer s
-consumeName (w, ts') dst d = do
-    d' <- w dst d
-    loop ts' dst d'
-    where loop ts dst d = case satisfyOrEscaped nameCodePoint ts of
+consumeName (w0, ts0) dst d0 = do
+    d' <- w0 dst d0
+    loop ts0 d'
+    where loop ts d = case satisfyOrEscaped nameCodePoint ts of
               Just (w, ts') -> do
                   d' <- w dst d
-                  loop ts' dst d'
+                  loop ts' d'
               Nothing -> return (d, ts)
 
 {-# INLINE parseName #-}
@@ -498,15 +500,16 @@ parseNumericValue t0@(Text a offs1 _) = case withSign start t0 of
           digits sign !c t = case t of
               '.' :. (digit -> Just d) :. ts -> dot sign (accIR c d) (-1) ts
               (digit -> Just d) :. ts        -> digits sign (accIR c d) ts
-              _ -> Just $ expn NVInteger (sign $ readIR c) 0 t
+              _ -> Just $ expn True (sign $ readIR c) 0 t
           dot sign !c !e t = case t of
               (digit -> Just d) :. ts        -> dot sign (accIR c d) (e-1) ts
-              _ -> Just $ expn NVNumber (sign $ readIR c) e t
-          expn f c e0 t = case t of
+              _ -> Just $ expn False (sign $ readIR c) e t
+          expn int c e0 t = case t of
               x :. ts
                   | isExponent x
                   , Just r <- withSign (expStart c e0 0) ts -> r
-              _ -> (f $ scientific c e0, t)
+              _   | int -> (NVInteger c, t)
+                  | otherwise -> (NVNumber $ scientific c e0, t)
           expStart c e0 e sign t = case t of
               (digit -> Just d) :. ts -> expDigits c e0 (e*10 + d) sign ts
               _ -> Nothing
@@ -725,7 +728,7 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
                       ')' :. ts -> go' BadUrl d ts
                       (escapedCodePoint' -> Just (_, ts)) -> do
                           badUrl d ts
-                      c :. ts ->
+                      _ :. ts ->
                           badUrl d ts
                       _ -> go' BadUrl d t
         mkText :: A.MArray s -> Int -> Writer s -> ST s (Text, Int, Text)
@@ -743,6 +746,7 @@ isWhitespace '\x000A' = True
 isWhitespace '\x0020' = True
 isWhitespace _        = False
 
+nonPrintableCodePoint :: Char -> Bool
 nonPrintableCodePoint c
     | c >= '\x0000' && c <= '\x0008' = True -- NULL through BACKSPACE
     | c == '\x000B'                  = True -- LINE TABULATION
