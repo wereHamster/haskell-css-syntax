@@ -26,6 +26,7 @@ import           Numeric
 import           Prelude
 
 import           Data.Text.Internal (Text(..))
+import           Data.Text.Unsafe (inlineInterleaveST)
 import qualified Data.Text.Array as A
 import           Control.Monad.ST (ST)
 import           GHC.Base (unsafeChr)
@@ -102,8 +103,8 @@ type Unit = Text
 --
 -- https://drafts.csswg.org/css-syntax/#tokenization
 
-tokenize :: Text -> Either String [Token]
-tokenize = Right . parseTokens . preprocessInputStream
+tokenize :: Text -> [Token]
+tokenize = parseTokens . preprocessInputStream
 
 
 
@@ -220,6 +221,7 @@ needComment a CDC = case a of
     -- It's also possible to make Delim 'a' which will be parsed as Ident
     -- but we can't do much in this case since it's impossible to
     -- create Delim 'a' tokens in parser.
+    Delim '!' -> True
     Delim '@' -> True
     Delim '#' -> True
     Delim '-' -> True
@@ -325,8 +327,10 @@ renderString t0@(Text _ _ l)
         Nothing -> return d
         Just (c, t')
             | c == '\x0' -> do
-                d' <- escapeAsCodePoint dst d '\xFFFD'
-                go t' d' dst
+                write dst d '\xFFFD'
+                -- spec says it should be escaped, but we loose
+                -- serialize->tokenize->serialize roundtrip that way
+                go t' (d+1) dst
             | (c >= '\x1' && c <= '\x1F') || c == '\x7F' -> do
                 d' <- escapeAsCodePoint dst d c
                 go t' d' dst
@@ -450,13 +454,11 @@ nameStartCodePoint c =
 nameCodePoint :: Char -> Bool
 nameCodePoint c = nameStartCodePoint c || isDigit c || c == '-'
 
-satisfy :: (Char -> Bool) -> Text -> Maybe (Writer' s)
-satisfy pred (c :. ts) | pred c =
-    Just (\ dst d -> write dst d c >> return (d+1), ts)
-satisfy _ _ = Nothing
-
 satisfyOrEscaped :: (Char -> Bool) -> Text -> Maybe (Writer' s)
-satisfyOrEscaped p t = satisfy p t <|> escapedCodePoint' t
+satisfyOrEscaped pred (c :. ts)
+    | pred c = Just (\ dst d -> write dst d c >> return (d+1), ts)
+    | c == '\\' = escapedCodePoint ts
+satisfyOrEscaped _ _ = Nothing
 
 -- | Check if three code points would start an identifier and consume name
 parseName :: Text -> Maybe (Writer s)
@@ -479,11 +481,10 @@ consumeName (w, ts') dst d = do
               Nothing -> return (d, ts)
 
 {-# INLINE parseName #-}
-{-# INLINE satisfy #-}
+{-# INLINE consumeName #-}
 {-# INLINE satisfyOrEscaped #-}
 {-# INLINE escapedCodePoint #-}
 {-# INLINE escapedCodePoint' #-}
-{-# INLINE consumeName #-}
 
 parseNumericValue :: Text -> Maybe (Text, NumericValue, Text)
 parseNumericValue t0@(Text a offs1 _) = case withSign start t0 of
@@ -585,11 +586,13 @@ parseTokens :: Text -> [Token]
 parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
     dst <- A.new len
     dsta <- A.unsafeFreeze dst
-    let go' !t acc d tgo = go (t : acc) d tgo
-        go !acc d tgo = case tgo of
+    let go' !t d tgo = do
+            ts <- inlineInterleaveST $ go d tgo
+            return (t : ts)
+        go d tgo = case tgo of
             c :. ts | isWhitespace c ->
-                 go' Whitespace acc d (skipWhitespace ts)
-            '/' :. '*' :. ts -> go acc d (skipComment ts)
+                 go' Whitespace d (skipWhitespace ts)
+            '/' :. '*' :. ts -> go d (skipComment ts)
 
             '<' :. '!' :. '-' :. '-' :. ts -> token CDO ts
             '-' :. '-' :. '>' :. ts ->        token CDC ts
@@ -614,12 +617,12 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
 
             (parseNumericValue -> Just (repr, nv, ts))
                 | '%' :. ts' <- ts ->
-                    go' (Percentage repr nv) acc d ts'
+                    go' (Percentage repr nv) d ts'
                 | Just u <- parseName ts -> do
                     (unit, d', ts') <- mkText dst d u
-                    go' (Dimension repr nv unit) acc d' ts'
+                    go' (Dimension repr nv unit) d' ts'
                 | otherwise ->
-                    go' (Number repr nv) acc d ts
+                    go' (Number repr nv) d ts
 
             -- ident like
             (parseName -> Just n) -> do
@@ -630,35 +633,35 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
                     case ts of
                         '(' :. (skipWhitespace -> ts') ->
                             case ts' of
-                                '"'  :. _ -> go' (Function name) acc d' ts'
-                                '\'' :. _ -> go' (Function name) acc d' ts'
-                                _ -> parseUrl acc d' ts'
-                        _ -> go' (Ident name) acc d' ts
+                                '"'  :. _ -> go' (Function name) d' ts'
+                                '\'' :. _ -> go' (Function name) d' ts'
+                                _ -> parseUrl d' ts'
+                        _ -> go' (Ident name) d' ts
                 else
                     case ts of
-                        '(' :. ts' -> go' (Function name) acc d' ts'
-                        _ -> go' (Ident name) acc d' ts
+                        '(' :. ts' -> go' (Function name) d' ts'
+                        _ -> go' (Ident name) d' ts
 
-            '"' :. ts -> parseString '"' acc d ts
-            '\'' :. ts -> parseString '\'' acc d ts
+            '"' :. ts -> parseString '"' d ts
+            '\'' :. ts -> parseString '\'' d ts
 
             '@' :. (parseName -> Just n) -> do
                 (name, d', ts) <- mkText dst d n
-                go' (AtKeyword name) acc d' ts
+                go' (AtKeyword name) d' ts
 
             '#' :. (parseName -> Just n) -> do
                 (name, d', ts) <- mkText dst d n
-                go' (Hash HId name) acc d' ts
+                go' (Hash HId name) d' ts
 
             '#' :. (satisfyOrEscaped nameCodePoint -> Just n) -> do
                 (name, d', ts) <- mkText dst d (consumeName n)
-                go' (Hash HUnrestricted name) acc d' ts
+                go' (Hash HUnrestricted name) d' ts
 
             c :. ts ->
                 token (Delim c) ts
-            _ -> return (dst, reverse acc)
+            _ -> return []
 
-            where token !t ts = go (t : acc) d ts
+            where token t ts = go' t d ts
 
         isUrl t@(Text _ _ 3)
             | u :. r :. l :. _ <- t =
@@ -668,7 +671,7 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
         isUrl _ = False
 
         -- https://drafts.csswg.org/css-syntax-3/#consume-string-token
-        parseString endingCodePoint acc d0 = string d0
+        parseString endingCodePoint d0 = string d0
             where string d t = case t of
                       c :. ts | c == endingCodePoint -> ret d ts
                       '\\' :. ts
@@ -679,16 +682,16 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
                               string d ts'
                           | Text _ _ 0 <- ts ->
                               string d ts
-                      '\n' :. _ -> go' BadString acc d t
+                      '\n' :. _ -> go' BadString d t
                       c :. ts -> do
                           write dst d c
                           string (d+1) ts
                       _ -> ret d t
-                  ret d t = go' (String $ Text dsta d0 (d-d0)) acc d t
+                  ret d t = go' (String $ Text dsta d0 (d-d0)) d t
 
         -- https://drafts.csswg.org/css-syntax/#consume-url-token
-        parseUrl acc d0 tUrl = url d0 (skipWhitespace tUrl)
-            where ret d ts = go' (Url (Text dsta d0 (d-d0))) acc d ts
+        parseUrl d0 tUrl = url d0 (skipWhitespace tUrl)
+            where ret d ts = go' (Url (Text dsta d0 (d-d0))) d ts
                   url d t = case t of
                       ')' :. ts -> ret d ts
                       c :. ts
@@ -719,18 +722,19 @@ parseTokens t0@(Text _ _ len) = snd $ A.run2 $ do
                       _ ->
                           ret d t
                   badUrl d t = case t of
-                      ')' :. ts -> go' BadUrl acc d ts
+                      ')' :. ts -> go' BadUrl d ts
                       (escapedCodePoint' -> Just (_, ts)) -> do
                           badUrl d ts
                       c :. ts ->
                           badUrl d ts
-                      _ -> go' BadUrl acc d t
+                      _ -> go' BadUrl d t
         mkText :: A.MArray s -> Int -> Writer s -> ST s (Text, Int, Text)
         mkText dest d w = do
             (d', ts) <- w dest d
             return (Text dsta d (d' - d), d', ts)
 
-    go [] 0 t0
+    r <- go 0 t0
+    return (dst, r)
 
 
 isWhitespace :: Char -> Bool
