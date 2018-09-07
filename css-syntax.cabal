@@ -1,7 +1,7 @@
 name:                css-syntax
-version:             0.0.8
+version:             1.0.0
 
-synopsis: This package implments a parser for the CSS syntax
+synopsis: High-performance CSS tokenizer and serializer.
 description:
     See https://drafts.csswg.org/css-syntax/
 
@@ -9,8 +9,8 @@ description:
 license:             MIT
 license-file:        LICENSE
 
-author:              Tomas Carnecky
-maintainer:          tomas.carnecky@gmail.com
+author:              Tomas Carnecky <tomas.carnecky@gmail.com>, Vladimir Shabanov <dev@vshabanov.com>
+maintainer:          Tomas Carnecky <tomas.carnecky@gmail.com>
 
 category:            Data
 
