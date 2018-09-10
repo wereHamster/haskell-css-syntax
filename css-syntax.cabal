@@ -61,7 +61,8 @@ test-suite spec
 benchmark benchmark
   hs-source-dirs:      benchmark src
   default-language:    Haskell2010
-  ghc-options:         -Wall -Wno-orphans -O2 -fprof-auto -rtsopts
+  ghc-options:         -Wall -Wno-orphans -O2 -rtsopts
+  -- -fprof-auto -fprof-cafs
 
   type:                exitcode-stdio-1.0
   main-is:             Benchmark.hs

@@ -58,6 +58,7 @@ main = do
             , bench "badUrl(aaa..)"$ nf tokenize $ "url((" <> fill "a" <> ")"
             , bench "badUrl(esc2)" $ nf tokenize $ "url((" <> fill "\\ab" <> ")"
             , tBench ";"
+            , tBench "||"
             , tBench "a;"
             , tBench "1;"
             , tBench "a:1;"
@@ -67,16 +68,17 @@ main = do
             , tBench "#FFFFFF "
             ],
 
-        bgroup "serialize.tokenize"
-            [ stBench "aaa"
-            , stBench ";"
-            , stBench "1;"
-            , stBench "1234567890;"
-            , stBench "a:1;"
-            , stBench "z-index:1;"
+        bgroup "serialize"
+            [ sBench "aaa"
+            , sBench ";"
+            , sBench "||"
+            , sBench "1;"
+            , sBench "1234567890;"
+            , sBench "a:1;"
+            , sBench "z-index:1;"
             ]
      ]
-    where stBench n =
+    where sBench n =
               let t = tokenize $ fill $ T.pack n in
               rnf t `seq` bench n $ nf serialize t
           tBench n = tBench' n n

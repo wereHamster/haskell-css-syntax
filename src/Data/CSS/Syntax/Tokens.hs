@@ -214,6 +214,8 @@ serialize = TL.toStrict . TLB.toLazyText . go
               | needComment x y = renderToken x <> "/**/" <> go xs
               | otherwise = renderToken x <> go xs
 
+{-# INLINE renderToken #-}
+{-# INLINE needComment #-}
 
 needComment :: Token -> Token -> Bool
 needComment a CDC = case a of
@@ -245,10 +247,12 @@ needComment a b = case a of
     Delim '.'     -> num
     Delim '+'     -> num
     Delim '/'     -> b == Delim '*' || b == SubstringMatch
-    Delim '|'     ->
-        b == Delim '|' || b == Delim '=' || b == Column || b == DashMatch
-    Delim c       -> b == Delim '='
-        && (c == '$' || c == '*' || c == '^' || c == '~')
+    Delim '|'     -> b == Delim '='
+        || b == Delim '|' ||  b == Column || b == DashMatch
+    Delim '$'     -> b == Delim '='
+    Delim '*'     -> b == Delim '='
+    Delim '^'     -> b == Delim '='
+    Delim '~'     -> b == Delim '='
     _             -> False
     where idn = i || b == Delim '-' || num
           i = case b of
@@ -266,21 +270,21 @@ needComment a b = case a of
 
 renderToken :: Token -> TLB.Builder
 renderToken token = case token of
-    Whitespace         -> " "
+    Whitespace         -> c ' '
 
     CDO                -> "<!--"
     CDC                -> "-->"
 
-    Comma              -> ","
-    Colon              -> ":"
-    Semicolon          -> ";"
+    Comma              -> c ','
+    Colon              -> c ':'
+    Semicolon          -> c ';'
 
-    LeftParen          -> "("
-    RightParen         -> ")"
-    LeftSquareBracket  -> "["
-    RightSquareBracket -> "]"
-    LeftCurlyBracket   -> "{"
-    RightCurlyBracket  -> "}"
+    LeftParen          -> c '('
+    RightParen         -> c ')'
+    LeftSquareBracket  -> c '['
+    RightSquareBracket -> c ']'
+    LeftCurlyBracket   -> c '{'
+    RightCurlyBracket  -> c '}'
 
     SuffixMatch        -> "$="
     SubstringMatch     -> "*="
@@ -294,25 +298,26 @@ renderToken token = case token of
     BadString          -> "\"\n"
 
     Number x _         -> t x
-    Percentage x _     -> t x <> "%"
+    Percentage x _     -> t x <> c '%'
     Dimension x _ u    -> t x <> t (renderDimensionUnit x u)
 
-    Url x              -> "url(" <> t (renderUnrestrictedHash x) <> ")"
+    Url x              -> "url(" <> t (renderUnrestrictedHash x) <> c ')'
     BadUrl             -> "url(()"
 
     Ident x            -> ident x
 
-    AtKeyword x        -> "@" <> ident x
+    AtKeyword x        -> c '@' <> ident x
 
-    Function x         -> ident x <> "("
+    Function x         -> ident x <> c '('
 
-    Hash HId x           -> "#" <> ident x
-    Hash HUnrestricted x -> "#" <> t (renderUnrestrictedHash x)
+    Hash HId x           -> c '#' <> ident x
+    Hash HUnrestricted x -> c '#' <> t (renderUnrestrictedHash x)
 
     Delim '\\'         -> "\\\n"
-    Delim x            -> TLB.singleton x
-    where t = TLB.fromText
-          q = TLB.singleton '"'
+    Delim x            -> c x
+    where c = TLB.singleton
+          t = TLB.fromText
+          q = c '"'
           string x = q <> t (renderString x) <> q
           ident = t . renderIdent
 
