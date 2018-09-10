@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+cd "$(dirname "$0")/.."
+
+[ -z "$DEBUG" ] || set -x
+
+
+[ -d dist ] || script/bootstrap
+
+cabal configure --disable-profiling
+cabal bench --benchmark-options="--output dist/benchmark.html --regress allocated:iters +RTS -T" # -p
