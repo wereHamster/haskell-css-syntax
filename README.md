@@ -30,7 +30,7 @@ I (the second author) needed to preprocess HTML in realtime to make it responsiv
 
 ### Tokenizer
 
-The tokenizer uses fast hand-written parser (20-50MB/s on average CSS files)
+The tokenizer uses fast low-level parser (20-50MB/s on average CSS files)
 to convert the input to a list of tokens. This
 process removes all comments and collapses consecutive whitespace into a single
 space character (U+0020). There may be other occasions where the tokenizer
@@ -38,7 +38,7 @@ looses information from the input stream.
 
 ### Serializer
 
-Serializer converts list of tokens back to string. Serialization round-trips: tokenizing produces same tokens list as tokenizing, serializing and tokenizing again. Tokenize-serialize pair works at about 10MB/s or more.
+Serializer converts list of tokens back to string. Serialization round-trips: tokenizing produces same tokens list as tokenizing, serializing and tokenizing again. Tokenize-serialize pair works at about 15MB/s or more.
 
 ### Example
 
