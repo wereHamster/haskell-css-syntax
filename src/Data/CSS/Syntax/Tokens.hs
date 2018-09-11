@@ -301,7 +301,7 @@ renderToken token = case token of
     Percentage x _     -> t x <> c '%'
     Dimension x _ u    -> t x <> t (renderDimensionUnit x u)
 
-    Url x              -> "url(" <> t (renderUnrestrictedHash x) <> c ')'
+    Url x              -> "url(" <> t (renderUrl x) <> c ')'
     BadUrl             -> "url(()"
 
     Ident x            -> ident x
@@ -345,6 +345,26 @@ renderString t0@(Text _ _ l)
                 write dst d '\\'
                 write dst (d+1) c
                 go t' (d+2) dst
+            | otherwise -> do
+                d' <- writeChar dst d c
+                go t' d' dst
+
+renderUrl :: Text -> Text
+renderUrl t0@(Text _ _ l)
+    | T.any needEscape t0 = withNewA (l*8) $ go t0 0
+    | otherwise = t0
+  where
+    needEscape c = c <= '\x1F' || c == '\x7F' || isWhitespace c
+        || c == '\\' || c == ')' || c == '"' || c == '\'' || c == '('
+    go t d dst = case T.uncons t of
+        Nothing -> return d
+        Just (c, t')
+            | c == '\x0' -> do
+                write dst d '\xFFFD'
+                go t' (d+1) dst
+            | needEscape c -> do
+                d' <- escapeAsCodePoint dst d c
+                go t' d' dst
             | otherwise -> do
                 d' <- writeChar dst d c
                 go t' d' dst
