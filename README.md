@@ -4,7 +4,7 @@ in the [css-syntax] module (it is the same algorithm that Blink uses since mid
 2015 when it replaced their old Bison based parser).
 
 Note: Only the tokenizer is currently implemented. Parsing the token stream
-into rules or declarations is available as of yet.
+into rules or declarations isn't available as of yet.
 
 
 ### Motivation
@@ -24,13 +24,21 @@ the token stream into a list of rules and declarations, so you can pick the
 declarations you want to process.
 
 
+### Motivation 2
+
+I (the second author) needed to preprocess HTML in realtime to make it responsive. Besides other things it requires parsing `style=...` attribute that can have any amount of junk so I optimized a parser/serializer a lot while still passing all the tests.
+
 ### Tokenizer
 
-The tokenizer uses Attoparsec to convert the input to a list of tokens. This
+The tokenizer uses fast low-level parser (20-50MB/s on average CSS files)
+to convert the input to a list of tokens. This
 process removes all comments and collapses consecutive whitespace into a single
 space character (U+0020). There may be other occasions where the tokenizer
 looses information from the input stream.
 
+### Serializer
+
+Serializer converts list of tokens back to string. Serialization round-trips: tokenizing produces same tokens list as tokenizing, serializing and tokenizing again. Tokenize-serialize pair works at about 15MB/s or more.
 
 ### Example
 
@@ -44,7 +52,7 @@ import           Data.CSS.Syntax.Tokens (tokenize, serialize)
 main :: IO ()
 main = do
     source <- T.readFile "path-to-your.css"
-    let Right tokens = tokenize source
+    let tokens = tokenize source
 
     putStrLn $ "The CSS file has " ++ show (length tokens)
         ++ " tokens"

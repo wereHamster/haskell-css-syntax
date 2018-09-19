@@ -1,7 +1,7 @@
 name:                css-syntax
-version:             0.0.8
+version:             1.0.0
 
-synopsis: This package implments a parser for the CSS syntax
+synopsis: High-performance CSS tokenizer and serializer.
 description:
     See https://drafts.csswg.org/css-syntax/
 
@@ -9,8 +9,8 @@ description:
 license:             MIT
 license-file:        LICENSE
 
-author:              Tomas Carnecky
-maintainer:          tomas.carnecky@gmail.com
+author:              Tomas Carnecky <tomas.carnecky@gmail.com>, Vladimir Shabanov <dev@vshabanov.com>
+maintainer:          Tomas Carnecky <tomas.carnecky@gmail.com>
 
 category:            Data
 
@@ -32,18 +32,16 @@ library
 
   build-depends:
      base >=4 && <5
-   , attoparsec >=0.13
-   , bytestring
    , scientific
    , text
 
-  ghc-options: -Wall
+  ghc-options: -Wall -O2
 
 
 test-suite spec
   hs-source-dirs:      test src
   default-language:    Haskell2010
-  ghc-options:         -Wall
+  ghc-options:         -Wall -Wno-orphans
 
   type:                exitcode-stdio-1.0
   main-is:             Test.hs
@@ -53,10 +51,30 @@ test-suite spec
 
   build-depends:
      base >=4 && <5
-   , attoparsec >=0.13
-   , bytestring
    , scientific
    , text
 
    , hspec
+   , directory
+   , QuickCheck
+
+benchmark benchmark
+  hs-source-dirs:      benchmark src
+  default-language:    Haskell2010
+  ghc-options:         -Wall -Wno-orphans -O2 -rtsopts
+  -- -fprof-auto -fprof-cafs
+
+  type:                exitcode-stdio-1.0
+  main-is:             Benchmark.hs
+
+  other-modules:
+     Data.CSS.Syntax.Tokens
+
+  build-depends:
+     base >=4 && <5
+   , scientific
+   , text
+
+   , criterion
+   , deepseq
    , directory
