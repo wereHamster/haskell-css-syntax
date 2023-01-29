@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, RankNTypes, PatternSynonyms, ViewPatterns,
-             BangPatterns #-}
+             BangPatterns, MagicHash #-}
 
 module Data.CSS.Syntax.Tokens
     ( Token(..)
@@ -29,9 +29,9 @@ import           Data.Text.Internal (Text(..))
 import           Data.Text.Unsafe (inlineInterleaveST)
 import qualified Data.Text.Array as A
 import           Control.Monad.ST (ST)
+import           GHC.Exts
 import           GHC.Base (unsafeChr)
-import           Data.Word (Word16)
-import           Data.Char (ord)
+import           GHC.Word (Word8(..))
 import           Data.Bits
 
 
@@ -114,7 +114,7 @@ tokenize = parseTokens . preprocessInputStream
 -- https://drafts.csswg.org/css-syntax/#input-preprocessing
 
 preprocessInputStream :: Text -> Text
-preprocessInputStream t0@(Text _ _ len) = withNewA len $ \ dst -> do
+preprocessInputStream t0@(Text _ _ len) = withNewA (len*3) $ \ dst -> do
     let go t d = case t of
             '\x0D' :. '\x0A' :. t' ->
                 put '\x0A' t'
@@ -122,8 +122,9 @@ preprocessInputStream t0@(Text _ _ len) = withNewA len $ \ dst -> do
                 put '\x0A' t'
             '\x0C' :. t' ->
                 put '\x0A' t'
-            '\x00' :. t' ->
-                put '\xFFFD' t'
+            '\x00' :. t' -> do
+                d' <- writeFFFD dst d
+                go t' d'
             c :. t' ->
                 put c t'
             _ ->
@@ -142,7 +143,7 @@ pattern x :. xs <- (uncons -> Just (x, xs))
 
 infixr 5 :.
 
--- | uncons first Word16 from Text without trying to decode UTF-16 sequence
+-- | uncons first Word8 from Text without trying to decode UTF-8 sequence
 uncons :: Text -> Maybe (Char, Text)
 uncons (Text src offs len)
     | len <= 0 = Nothing
@@ -150,37 +151,87 @@ uncons (Text src offs len)
       Just (w2c (A.unsafeIndex src offs), Text src (offs+1) (len-1))
 {-# INLINE uncons #-}
 
--- | write 16bit character
+-- | write replacement character
+writeFFFD :: A.MArray s -> Int -> ST s Int
+writeFFFD dst d = writeChar dst d '\xFFFD'
+
+-- | write 8bit character
 write :: A.MArray s -> Int -> Char -> ST s ()
 write dst d x = A.unsafeWrite dst d (c2w x)
 {-# INLINE write #-}
 
--- | write character that could have more than 16bit
+-- | write character that could have more than 8bit
 -- code from Data.Text.Internal.Unsafe.Char.unsafeWrite
 writeChar :: A.MArray s -> Int -> Char -> ST s Int
-writeChar dst d c
-    | n < 0x10000 = do
-        A.unsafeWrite dst d (fromIntegral n)
-        return (d+1)
-    | otherwise = do
-        A.unsafeWrite dst d lo
-        A.unsafeWrite dst (d+1) hi
-        return (d+2)
-    where n = ord c
-          m = n - 0x10000
-          lo = fromIntegral $ (m `shiftR` 10) + 0xD800
-          hi = fromIntegral $ (m .&. 0x3FF) + 0xDC00
+writeChar marr i c = case utf8Length c of
+    1 -> do
+        let n0 = intToWord8 (ord c)
+        A.unsafeWrite marr i n0
+        return (i+1)
+    2 -> do
+        let (n0, n1) = ord2 c
+        A.unsafeWrite marr i     n0
+        A.unsafeWrite marr (i+1) n1
+        return (i+2)
+    3 -> do
+        let (n0, n1, n2) = ord3 c
+        A.unsafeWrite marr i     n0
+        A.unsafeWrite marr (i+1) n1
+        A.unsafeWrite marr (i+2) n2
+        return (i+3)
+    _ -> do
+        let (n0, n1, n2, n3) = ord4 c
+        A.unsafeWrite marr i     n0
+        A.unsafeWrite marr (i+1) n1
+        A.unsafeWrite marr (i+2) n2
+        A.unsafeWrite marr (i+3) n3
+        return (i+4)
 {-# INLINE writeChar #-}
+
+utf8Length :: Char -> Int
+utf8Length (C# c) = I# ((1# +# geChar# c (chr# 0x80#)) +# (geChar# c (chr# 0x800#) +# geChar# c (chr# 0x10000#)))
+{-# INLINE utf8Length #-}
+
+ord2 :: Char -> (Word8,Word8)
+ord2 c = (x1,x2)
+    where
+      n  = ord c
+      x1 = intToWord8 $ (n `shiftR` 6) + 0xC0
+      x2 = intToWord8 $ (n .&. 0x3F)   + 0x80
+{-# INLINE ord2 #-}
+
+ord3 :: Char -> (Word8,Word8,Word8)
+ord3 c = (x1,x2,x3)
+    where
+      n  = ord c
+      x1 = intToWord8 $ (n `shiftR` 12) + 0xE0
+      x2 = intToWord8 $ ((n `shiftR` 6) .&. 0x3F) + 0x80
+      x3 = intToWord8 $ (n .&. 0x3F) + 0x80
+{-# INLINE ord3 #-}
+
+ord4 :: Char -> (Word8,Word8,Word8,Word8)
+ord4 c = (x1,x2,x3,x4)
+    where
+      n  = ord c
+      x1 = intToWord8 $ (n `shiftR` 18) + 0xF0
+      x2 = intToWord8 $ ((n `shiftR` 12) .&. 0x3F) + 0x80
+      x3 = intToWord8 $ ((n `shiftR` 6) .&. 0x3F) + 0x80
+      x4 = intToWord8 $ (n .&. 0x3F) + 0x80
+{-# INLINE ord4 #-}
+
+intToWord8 :: Int -> Word8
+intToWord8 = fromIntegral
+
 
 type Writer' s = (A.MArray s -> Int -> ST s Int, Text)
 type Writer s = A.MArray s -> Int -> ST s (Int, Text)
 
 -- | no-op for convenient pattern matching
-w2c :: Word16 -> Char
+w2c :: Word8 -> Char
 w2c = unsafeChr . fromIntegral
 {-# INLINE w2c #-}
 
-c2w :: Char -> Word16
+c2w :: Char -> Word8
 c2w = fromIntegral . ord
 {-# INLINE c2w #-}
 
@@ -333,10 +384,10 @@ renderString t0@(Text _ _ l)
         Nothing -> return d
         Just (c, t')
             | c == '\x0' -> do
-                write dst d '\xFFFD'
+                d' <- writeFFFD dst d
                 -- spec says it should be escaped, but we loose
                 -- serialize->tokenize->serialize roundtrip that way
-                go t' (d+1) dst
+                go t' d' dst
             | (c >= '\x1' && c <= '\x1F') || c == '\x7F' -> do
                 d' <- escapeAsCodePoint dst d c
                 go t' d' dst
@@ -360,8 +411,8 @@ renderUrl t0@(Text _ _ l)
         Nothing -> return d
         Just (c, t')
             | c == '\x0' -> do
-                write dst d '\xFFFD'
-                go t' (d+1) dst
+                d' <- writeFFFD dst d
+                go t' d' dst
             | needEscape c -> do
                 d' <- escapeAsCodePoint dst d c
                 go t' d' dst
@@ -409,8 +460,8 @@ renderUnrestrictedHash' = go
             Nothing -> return d
             Just (c, t')
                 | c == '\x0' -> do
-                    write dst d '\xFFFD'
-                    go t' (d+1) dst
+                    d' <- writeFFFD dst d
+                    go t' d' dst
                 | (c >= '\x1' && c <= '\x1F') || c == '\x7F' -> do
                     d' <- escapeAsCodePoint dst d c
                     go t' d' dst
@@ -444,21 +495,18 @@ escapedCodePoint t = case t of
               (hex -> Just d) :. ts' -> go (n-1) (acc*16 + d) ts'
               c :. ts' | isWhitespace c -> ret acc ts'
               _ -> ret acc ts
-          ret (safe -> c) ts
-              | c < 0x10000 = Just
-                  (\ dst d -> write dst d (unsafeChr c) >> return (d+1), ts)
-              | otherwise = Just
-                  (\ dst d -> write dst d lo >> write dst (d+1) hi >> return (d+2)
-                  ,ts)
-              where m = c - 0x10000
-                    lo = unsafeChr $ (m `shiftR` 10) + 0xD800
-                    hi = unsafeChr $ (m .&. 0x3FF) + 0xDC00
+          ret c ts = Just
+              (\ dst d ->
+                  if safe c
+                  then writeChar dst d (unsafeChr c)
+                  else writeFFFD dst d
+              ,ts)
 
-safe :: Int -> Int
+safe :: Int -> Bool
 safe x
-    | x == 0 || x > 0x10FFFF   = 0xFFFD
-    | x .&. 0x1ff800 /= 0xd800 = x
-    | otherwise                = 0xFFFD -- UTF16 surrogate code point
+    | x == 0 || x > 0x10FFFF   = False
+    | x .&. 0x1ff800 /= 0xd800 = True
+    | otherwise                = False -- UTF-16 surrogate code point
 
 hex :: Char -> Maybe Int
 hex c
