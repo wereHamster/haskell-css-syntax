@@ -3,8 +3,8 @@ and from that into rules or declarations. The exact algorithm is defined
 in the [css-syntax] module (it is the same algorithm that Blink uses since mid
 2015 when it replaced their old Bison based parser).
 
-Note: Only the tokenizer is currently implemented. Parsing the token stream
-into rules or declarations isn't available as of yet.
+Note: Only the tokenizer is currently implemented here. Parsing the token stream
+into rules or declarations is available at [Stylist Traits](https://hackage.haskell.org/package/stylist-traits).
 
 
 ### Motivation
@@ -27,6 +27,10 @@ declarations you want to process.
 ### Motivation 2
 
 I (the second author) needed to preprocess HTML in realtime to make it responsive. Besides other things it requires parsing `style=...` attribute that can have any amount of junk so I optimized a parser/serializer a lot while still passing all the tests.
+
+### Motivation 3
+
+Haskell CSS Syntax is an adopted component of the [Argonaut Stack](https://argonaut-constellation.org/) browser engine. A full [styling engine](https://hackage.haskell.org/package/stylist) can readily be implemented around it!
 
 ### Tokenizer
 
