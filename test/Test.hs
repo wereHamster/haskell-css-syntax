@@ -291,8 +291,12 @@ spec = parallel $ do
             testSerialize [Ident "a", Ident "b"] "a/**/b"
             testSerialize [Dimension "1" (NVInteger 1) "em", Ident "b"] "1em/**/b"
 
+        it "Doesn't regress Tokenize=>serialize=>tokenize roundtrip" $ do
+            let a = tokenize "\\-->"
+            tokenize (serialize a) `shouldBe` a
+
         modifyMaxSize (const 500) $ modifyMaxSuccess (const 100000) $
-            prop "Tokeninze=>serialize=>tokenize roundtrip"
+            prop "Tokenize=>serialize=>tokenize roundtrip"
                 prop_tstRoundTrip
         modifyMaxSize (const 50) $ modifyMaxSuccess (const 100000) $
             prop "Serialize=>tokenize roundtrip"
