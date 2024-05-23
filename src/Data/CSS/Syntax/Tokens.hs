@@ -287,6 +287,7 @@ needComment a CDC = case a of
     _ -> False
 needComment a b = case a of
     Whitespace    -> b == Whitespace
+    Ident "--"    -> b == Delim '>' -- Looks like a CDC
     Ident _       -> idn || b == CDC || b == LeftParen
     AtKeyword _   -> idn || b == CDC
     Hash {}       -> idn || b == CDC
