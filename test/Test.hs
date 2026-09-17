@@ -112,6 +112,7 @@ spec = parallel $ do
             testTokenize "\x12345" [Ident "\x12345"]
             testTokenize "\0" [Ident "\xfffd"]
             testTokenize "ab\0c" [Ident $ "ab\xfffd" <> "c"]
+            testTokenize "testing-123" [Ident "testing-123"]
 
         it "Function" $ do
             testTokenize "scale(2)" [Function "scale", Number "2" (NVInteger 2), RightParen]

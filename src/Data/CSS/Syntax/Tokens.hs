@@ -288,7 +288,7 @@ needComment a CDC = case a of
 needComment a b = case a of
     Whitespace    -> b == Whitespace
     Ident "--"    -> b == Delim '>' -- Looks like a CDC
-    Ident _       -> idn || b == CDC || b == LeftParen
+    Ident _       -> idn || b == CDC || b == LeftParen || num
     AtKeyword _   -> idn || b == CDC
     Hash {}       -> idn || b == CDC
     Dimension {}  -> idn || b == CDC
