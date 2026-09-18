@@ -296,6 +296,10 @@ spec = parallel $ do
             let a = tokenize "\\-->"
             tokenize (serialize a) `shouldBe` a
 
+            let b = [Ident "--", Function "url", String "argument"]
+            tokenize (serialize b) `shouldBe` b
+
+
         modifyMaxSize (const 500) $ modifyMaxSuccess (const 100000) $
             prop "Tokenize=>serialize=>tokenize roundtrip"
                 prop_tstRoundTrip

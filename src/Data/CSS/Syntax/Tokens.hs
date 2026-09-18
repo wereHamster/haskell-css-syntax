@@ -287,7 +287,7 @@ needComment a CDC = case a of
     _ -> False
 needComment a b = case a of
     Whitespace    -> b == Whitespace
-    Ident "--"    -> b == Delim '>' -- Looks like a CDC
+    Ident "--"    -> b == Delim '>' || needComment (Ident "a") b -- Looks like a CDC, & make sure to hit other ident codepath!
     Ident _       -> idn || b == CDC || b == LeftParen || num
     AtKeyword _   -> idn || b == CDC
     Hash {}       -> idn || b == CDC
